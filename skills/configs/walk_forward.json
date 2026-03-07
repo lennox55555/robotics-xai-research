@@ -1,0 +1,52 @@
+{
+  "skill_id": "walk_forward",
+  "name": "Walk Forward",
+  "description": "Walk forward at moderate speed while maintaining balance",
+  "reward_components": [
+    "forward_velocity",
+    "upright_reward",
+    "gait_symmetry",
+    "energy_efficiency",
+    "fall_penalty",
+    "lateral_stability"
+  ],
+  "reward_weights": {
+    "forward_velocity": 2.0,
+    "upright_reward": 1.0,
+    "gait_symmetry": 0.5,
+    "energy_efficiency": 0.1,
+    "fall_penalty": 1.0,
+    "lateral_stability": 0.3
+  },
+  "success_criteria": "walk forward 5m without falling, maintaining velocity > 0.5 m/s",
+  "termination_conditions": [
+    "com_height < 0.5",
+    "episode_length > 1000"
+  ],
+  "training_config": {
+    "algorithm": "PPO",
+    "total_timesteps": 1000000,
+    "learning_rate": 0.0001,
+    "transfer_from": "balance_stand"
+  },
+  "curriculum": [
+    {
+      "stage": 1,
+      "target_velocity": 0.2,
+      "max_steps": 200000
+    },
+    {
+      "stage": 2,
+      "target_velocity": 0.5,
+      "max_steps": 400000
+    },
+    {
+      "stage": 3,
+      "target_velocity": 0.8,
+      "max_steps": 400000
+    }
+  ],
+  "prerequisites": [
+    "balance_stand"
+  ]
+}
