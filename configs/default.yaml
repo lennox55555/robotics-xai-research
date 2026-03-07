@@ -1,0 +1,48 @@
+# Default experiment configuration
+
+experiment:
+  name: "experiment"
+  seed: 42
+
+# Environment settings
+env:
+  name: "G1Humanoid-v0"  # Unitree G1 with hands (custom)
+  max_episode_steps: 1000
+  normalize_obs: true
+  normalize_reward: true
+
+# Training settings
+training:
+  algorithm: "PPO"
+  total_timesteps: 1_000_000
+  learning_rate: 3e-4
+  batch_size: 64
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+# Model architecture
+model:
+  policy: "MlpPolicy"
+  hidden_sizes: [256, 256]
+  activation: "tanh"
+
+# Explainability settings
+explainability:
+  enabled: true
+  method: "attention"  # attention, gradcam, shap
+  log_frequency: 10000
+
+# Logging
+logging:
+  wandb:
+    enabled: true
+    project: "robotics-xai-research"
+    tags: ["mujoco", "rl", "explainability"]
+  save_frequency: 50000
+  eval_frequency: 10000
+  n_eval_episodes: 10
