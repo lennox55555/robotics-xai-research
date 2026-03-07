@@ -81,9 +81,35 @@ class Memory:
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary (excluding embedding)."""
-        data = asdict(self)
-        data.pop('embedding', None)  # Don't serialize embedding
+        """Convert to dictionary for ChromaDB metadata.
+
+        ChromaDB requires non-empty values, so we filter out empty lists/dicts
+        and convert complex types to strings.
+        """
+        data = {
+            "id": self.id,
+            "source_agent": self.source_agent,
+            "message_type": self.message_type,
+            "timestamp": self.timestamp,
+            "category": self.category,
+            "importance": self.importance,
+            "access_count": self.access_count,
+        }
+
+        # Only add optional fields if they have values
+        if self.tags:
+            data["tags"] = ",".join(self.tags)
+        if self.last_accessed:
+            data["last_accessed"] = self.last_accessed
+        if self.related_skill:
+            data["related_skill"] = self.related_skill
+        if self.related_task:
+            data["related_task"] = self.related_task
+        if self.source_message_id:
+            data["source_message_id"] = self.source_message_id
+        if self.metadata:
+            data["metadata_json"] = json.dumps(self.metadata)
+
         return data
 
 
@@ -244,10 +270,12 @@ class MemoryStore:
                 if meta.get("importance", 0.5) < min_importance:
                     continue
 
+                # Filter metadata to only include Memory fields (excluding id since it's passed separately)
+                valid_fields = {k for k in Memory.__dataclass_fields__ if k not in ('id', 'content', 'embedding')}
                 memory = Memory(
                     id=results["ids"][0][i],
                     content=doc,
-                    **{k: v for k, v in meta.items() if k in Memory.__dataclass_fields__}
+                    **{k: v for k, v in meta.items() if k in valid_fields}
                 )
 
                 # Convert distance to similarity (cosine distance -> similarity)
