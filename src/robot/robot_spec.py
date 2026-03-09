@@ -61,8 +61,8 @@ class G1RobotSpec:
     height_standing: float = 1.32  # meters
     mass: float = 35.0  # kg (approximate)
 
-    # XML path
-    xml_path: str = "mujoco_menagerie/unitree_g1/g1_with_hands.xml"
+    # XML path (scene includes ground plane)
+    xml_path: str = "mujoco_menagerie/unitree_g1/scene_with_hands.xml"
 
     # Joint groups
     joint_groups: Dict[str, List[str]] = field(default_factory=lambda: {
@@ -295,6 +295,50 @@ REWARD_COMPONENTS = {
         "formula": "1.0 if stable_after_landing else 0",
         "weight_default": 2.0,
         "relevant_skills": ["jump"],
+    },
+
+    # Arm and hand rewards
+    "right_hand_height": {
+        "description": "Reward for raising right hand (for raising hand, waving)",
+        "formula": "right_hand_z / target_height",
+        "weight_default": 2.0,
+        "relevant_skills": ["raise_hand", "wave", "reach"],
+    },
+    "left_hand_height": {
+        "description": "Reward for raising left hand",
+        "formula": "left_hand_z / target_height",
+        "weight_default": 2.0,
+        "relevant_skills": ["raise_hand", "wave", "reach"],
+    },
+    "hand_target_distance": {
+        "description": "Reward for moving hand toward target position",
+        "formula": "-distance(hand_pos, target_pos)",
+        "weight_default": 2.0,
+        "relevant_skills": ["reach", "point", "touch"],
+    },
+    "wave_motion": {
+        "description": "Reward oscillating hand motion (for waving)",
+        "formula": "abs(hand_lateral_velocity) when hand is raised",
+        "weight_default": 1.0,
+        "relevant_skills": ["wave"],
+    },
+    "arm_extension": {
+        "description": "Reward extending arm outward",
+        "formula": "distance(hand, shoulder) / max_arm_length",
+        "weight_default": 1.0,
+        "relevant_skills": ["reach", "point", "push"],
+    },
+    "grip_force": {
+        "description": "Reward appropriate grip force on objects",
+        "formula": "1.0 - abs(grip_force - target_force) / max_force",
+        "weight_default": 1.0,
+        "relevant_skills": ["grasp", "hold", "carry"],
+    },
+    "finger_curl": {
+        "description": "Reward curling fingers (for grasping)",
+        "formula": "mean(finger_joint_angles) / max_angle",
+        "weight_default": 1.0,
+        "relevant_skills": ["grasp", "fist"],
     },
 }
 

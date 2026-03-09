@@ -1,0 +1,32 @@
+{
+  "skill_id": "jump_skill",
+  "name": "Vertical Jump",
+  "description": "Perform a vertical jump by crouching down, jumping up, and landing stably",
+  "reward_components": [
+    "upright_reward",
+    "jump_height",
+    "landing_stability",
+    "energy_efficiency",
+    "smoothness",
+    "fall_penalty"
+  ],
+  "reward_weights": {
+    "upright_reward": 1.0,
+    "jump_height": 3.0,
+    "landing_stability": 2.0,
+    "energy_efficiency": 0.1,
+    "smoothness": 0.3,
+    "fall_penalty": 10.0
+  },
+  "success_criteria": "achieve jump height above 0.3m and stable landing",
+  "termination_conditions": [
+    "com_height < 0.4"
+  ],
+  "training_config": {
+    "algorithm": "PPO",
+    "total_timesteps": 10000,
+    "learning_rate": 0.0003
+  },
+  "curriculum": null,
+  "prerequisites": []
+}

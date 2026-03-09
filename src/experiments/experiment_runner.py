@@ -20,6 +20,9 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import torch
+# Limit CPU threads to reduce load
+torch.set_num_threads(2)
+
 import gymnasium as gym
 import mujoco
 import mujoco.viewer
@@ -49,6 +52,14 @@ from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback,
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize, SubprocVecEnv
 from stable_baselines3.common.monitor import Monitor
 
+try:
+    import wandb
+    from wandb.integration.sb3 import WandbCallback
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print("wandb not installed - logging disabled")
+
 from src.robot.robot_spec import get_robot_spec, REWARD_COMPONENTS, SKILL_TEMPLATES
 
 
@@ -64,7 +75,7 @@ class ExperimentConfig:
     total_timesteps: int = 500_000
     learning_rate: float = 3e-4
     batch_size: int = 64
-    n_envs: int = 4  # Parallel environments
+    n_envs: int = 1  # Single environment (lowest CPU usage)
     gamma: float = 0.99
 
     # Network architecture
@@ -113,8 +124,8 @@ class G1SkillEnv(gym.Env):
         self.render_mode = render_mode
         self.frame_skip = frame_skip
 
-        # Load MuJoCo model
-        xml_path = PROJECT_ROOT / "mujoco_menagerie" / "unitree_g1" / "g1_with_hands.xml"
+        # Load MuJoCo model (scene includes ground plane)
+        xml_path = PROJECT_ROOT / "mujoco_menagerie" / "unitree_g1" / "scene_with_hands.xml"
         self.model = mujoco.MjModel.from_xml_path(str(xml_path))
         self.data = mujoco.MjData(self.model)
 
@@ -255,6 +266,44 @@ class G1SkillEnv(gym.Env):
                 if com_height < self._initial_height + 0.05:  # Near ground
                     stability = np.exp(-np.linalg.norm(self.data.qvel[:6]))
                     reward += weight * stability
+
+            elif comp_name == "right_hand_height":
+                # Reward for raising right hand
+                # Find right hand body and get its height
+                try:
+                    right_hand_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "right_hand_palm_link")
+                    if right_hand_id >= 0:
+                        hand_height = self.data.xpos[right_hand_id][2]
+                        # Target: hand above shoulder (~1.2m)
+                        target_hand_height = 1.5
+                        reward += weight * min(hand_height / target_hand_height, 1.5)
+                except:
+                    pass
+
+            elif comp_name == "left_hand_height":
+                # Reward for raising left hand
+                try:
+                    left_hand_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "left_hand_palm_link")
+                    if left_hand_id >= 0:
+                        hand_height = self.data.xpos[left_hand_id][2]
+                        target_hand_height = 1.5
+                        reward += weight * min(hand_height / target_hand_height, 1.5)
+                except:
+                    pass
+
+            elif comp_name == "wave_motion":
+                # Reward for oscillating hand motion (waving)
+                try:
+                    right_hand_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "right_hand_palm_link")
+                    if right_hand_id >= 0:
+                        # Reward lateral hand movement when hand is raised
+                        hand_height = self.data.xpos[right_hand_id][2]
+                        if hand_height > 1.2:  # Hand is raised
+                            # Get hand velocity in y direction (lateral)
+                            hand_vel_y = abs(self.data.cvel[right_hand_id][4])  # Angular velocity
+                            reward += weight * min(hand_vel_y, 2.0)
+                except:
+                    pass
 
         return reward
 
@@ -422,10 +471,27 @@ class ExperimentRunner:
         self.skills_dir.mkdir(parents=True, exist_ok=True)
 
     def create_config_from_template(self, skill_id: str, **overrides) -> ExperimentConfig:
-        """Create experiment config from a skill template."""
+        """Create experiment config from a skill template or custom config file."""
         template = SKILL_TEMPLATES.get(skill_id)
+
+        # If not in templates, check for custom config file
         if not template:
-            raise ValueError(f"Unknown skill template: {skill_id}")
+            config_path = self.skills_dir / "configs" / f"{skill_id}.json"
+            if config_path.exists():
+                with open(config_path) as f:
+                    custom_config = json.load(f)
+                template = {
+                    "name": custom_config.get("name", skill_id),
+                    "description": custom_config.get("description", ""),
+                    "reward_components": custom_config.get("reward_components", ["upright_reward", "height_reward"]),
+                    "reward_weights": custom_config.get("reward_weights", {}),
+                    "training_config": custom_config.get("training_config", {}),
+                    "curriculum": custom_config.get("curriculum"),
+                    "prerequisites": custom_config.get("prerequisites", []),
+                }
+
+        if not template:
+            raise ValueError(f"Unknown skill template: {skill_id}. No template or config found.")
 
         config = ExperimentConfig(
             skill_id=skill_id,
@@ -456,7 +522,7 @@ class ExperimentRunner:
             return env
         return _init
 
-    def run(self, config: ExperimentConfig, render: bool = False) -> Dict[str, Any]:
+    def run(self, config: ExperimentConfig, render: bool = False, extra_callback=None) -> Dict[str, Any]:
         """Run a training experiment."""
         # Create experiment directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -464,16 +530,34 @@ class ExperimentRunner:
         exp_dir.mkdir(parents=True, exist_ok=True)
 
         # Save config
+        config_dict = {
+            "skill_id": config.skill_id,
+            "name": config.name,
+            "algorithm": config.algorithm,
+            "total_timesteps": config.total_timesteps,
+            "reward_components": config.reward_components,
+            "reward_weights": config.reward_weights,
+        }
         config_path = exp_dir / "config.json"
         with open(config_path, 'w') as f:
-            json.dump({
-                "skill_id": config.skill_id,
-                "name": config.name,
-                "algorithm": config.algorithm,
-                "total_timesteps": config.total_timesteps,
-                "reward_components": config.reward_components,
-                "reward_weights": config.reward_weights,
-            }, f, indent=2)
+            json.dump(config_dict, f, indent=2)
+
+        # Initialize Weights & Biases
+        wandb_run = None
+        if WANDB_AVAILABLE:
+            try:
+                wandb_run = wandb.init(
+                    project=os.getenv("WANDB_PROJECT", "robotics-xai-research"),
+                    entity=os.getenv("WANDB_ENTITY") or None,
+                    name=f"{config.skill_id}_{timestamp}",
+                    config=config_dict,
+                    sync_tensorboard=True,
+                    save_code=False,
+                )
+                print(f"W&B run: {wandb_run.url}")
+            except Exception as e:
+                print(f"W&B init failed: {e}")
+                wandb_run = None
 
         # Create vectorized environment
         # Use single env with rendering, or multiple parallel envs for speed
@@ -489,11 +573,25 @@ class ExperimentRunner:
 
         # Create or load model
         model = None
-        if config.transfer_from:
+        AlgClass = {"PPO": PPO, "SAC": SAC, "TD3": TD3}[config.algorithm]
+
+        # First, check if we can resume from a previous training of this skill
+        resume_path = self.skills_dir / "trained" / config.skill_id / "model.zip"
+        resume_normalize_path = self.skills_dir / "trained" / config.skill_id / "vec_normalize.pkl"
+        if resume_path.exists():
+            print(f"Resuming training from previous checkpoint: {config.skill_id}")
+            model = AlgClass.load(str(resume_path), env=env)
+            # Also load the VecNormalize stats if available
+            if resume_normalize_path.exists():
+                env = VecNormalize.load(str(resume_normalize_path), env.venv)
+                env.training = True  # Continue updating stats
+                print(f"Loaded normalization stats from previous training")
+
+        # If no resume, check for transfer learning from another skill
+        if model is None and config.transfer_from:
             transfer_path = self.skills_dir / "trained" / config.transfer_from / "model.zip"
             if transfer_path.exists():
                 print(f"Loading pretrained model from: {config.transfer_from}")
-                AlgClass = {"PPO": PPO, "SAC": SAC, "TD3": TD3}[config.algorithm]
                 model = AlgClass.load(str(transfer_path), env=env)
 
         if model is None:
@@ -529,6 +627,17 @@ class ExperimentRunner:
             ),
         ]
 
+        # Add W&B callback if available
+        if WANDB_AVAILABLE and wandb_run is not None:
+            callbacks.append(WandbCallback(
+                model_save_path=str(exp_dir / "wandb_models"),
+                verbose=1,
+            ))
+
+        # Add extra callback if provided (for live UI updates)
+        if extra_callback is not None:
+            callbacks.append(extra_callback)
+
         # Train
         print(f"\nStarting training for: {config.name}")
         print(f"Output directory: {exp_dir}")
@@ -544,25 +653,53 @@ class ExperimentRunner:
             # Save final model
             model_path = self.skills_dir / "trained" / config.skill_id
             model_path.mkdir(parents=True, exist_ok=True)
-            model.save(str(model_path / "model"))
+            model.save(str(model_path / "model.zip"))
             env.save(str(model_path / "vec_normalize.pkl"))
 
             print(f"\nModel saved to: {model_path}")
 
-            # Save metrics
+            # Save metrics (track cumulative timesteps across sessions)
+            prev_metrics_path = model_path / "metrics.json"
+            prev_total = 0
+            if prev_metrics_path.exists():
+                try:
+                    with open(prev_metrics_path) as f:
+                        prev_metrics = json.load(f)
+                        prev_total = prev_metrics.get("cumulative_timesteps", 0)
+                except:
+                    pass
+
             metrics = {
                 "skill_id": config.skill_id,
-                "total_timesteps": config.total_timesteps,
+                "session_timesteps": config.total_timesteps,
+                "cumulative_timesteps": prev_total + config.total_timesteps,
                 "training_time": time.time(),
             }
 
             with open(model_path / "metrics.json", 'w') as f:
                 json.dump(metrics, f, indent=2)
 
+            print(f"Cumulative training: {metrics['cumulative_timesteps']:,} timesteps")
+
+            # Log final metrics to W&B
+            if WANDB_AVAILABLE and wandb_run is not None:
+                wandb.log({
+                    "final_cumulative_timesteps": metrics['cumulative_timesteps'],
+                    "session_timesteps": metrics['session_timesteps'],
+                })
+                wandb.finish()
+                print(f"W&B run finished: {wandb_run.url}")
+
             return metrics
 
         finally:
             env.close()
+            # Make sure wandb is closed even on error
+            if WANDB_AVAILABLE and wandb_run is not None:
+                try:
+                    wandb.finish()
+                except:
+                    pass
 
     def evaluate(
         self,
@@ -621,13 +758,13 @@ class ExperimentRunner:
         return results
 
 
-def train_skill(skill_id: str, timesteps: Optional[int] = None, render: bool = False, **kwargs):
+def train_skill(skill_id: str, timesteps: Optional[int] = None, render: bool = False, callback=None, **kwargs):
     """Convenience function to train a skill."""
     runner = ExperimentRunner()
     config = runner.create_config_from_template(skill_id, **kwargs)
     if timesteps:
         config.total_timesteps = timesteps
-    return runner.run(config, render=render)
+    return runner.run(config, render=render, extra_callback=callback)
 
 
 def evaluate_skill(skill_id: str, n_episodes: int = 10, render: bool = False):

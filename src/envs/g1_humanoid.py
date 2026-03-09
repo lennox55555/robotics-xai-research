@@ -36,8 +36,8 @@ class G1HumanoidEnv(gym.Env):
         self.frame_skip = frame_skip
         self.task = task
 
-        # Load MuJoCo model
-        model_path = Path(__file__).parent.parent.parent / "mujoco_menagerie" / "unitree_g1" / "g1_with_hands.xml"
+        # Load MuJoCo model (scene includes ground plane)
+        model_path = Path(__file__).parent.parent.parent / "mujoco_menagerie" / "unitree_g1" / "scene_with_hands.xml"
         self.model = mujoco.MjModel.from_xml_path(str(model_path))
         self.data = mujoco.MjData(self.model)
 

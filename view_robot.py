@@ -60,7 +60,7 @@ def main():
     args = parser.parse_args()
 
     # Load MuJoCo model
-    xml_path = PROJECT_ROOT / "mujoco_menagerie" / "unitree_g1" / "g1_with_hands.xml"
+    xml_path = PROJECT_ROOT / "mujoco_menagerie" / "unitree_g1" / "scene_with_hands.xml"
     mj_model = mujoco.MjModel.from_xml_path(str(xml_path))
     mj_data = mujoco.MjData(mj_model)
 

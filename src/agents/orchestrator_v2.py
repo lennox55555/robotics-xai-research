@@ -80,54 +80,65 @@ class UnifiedOrchestrator:
             for name in list_available_skills()
         ])
 
+        # Include ALL reward components
         reward_components = "\n".join([
-            f"- **{name}**: {comp['description']}"
-            for name, comp in list(REWARD_COMPONENTS.items())[:10]
+            f"- **{name}**: {comp['description']} (for: {', '.join(comp['relevant_skills'])})"
+            for name, comp in REWARD_COMPONENTS.items()
         ])
 
-        return f"""You are an expert robotics AI trainer for teaching humanoid robots new skills.
+        return f"""You are an expert robotics AI trainer for the Unitree G1 humanoid robot.
 
 {robot_context}
 
-## Available Skill Templates
+## Available Skill Templates (pre-defined)
 {available_skills}
 
-## Reward Components Available
+## ALL Available Reward Components
 {reward_components}
 
 ## Your Capabilities
-1. **Design Skills**: Create skill definitions with appropriate rewards
-2. **Start Training**: Begin RL training for defined skills
-3. **Monitor Progress**: Track training metrics
-4. **Analyze Results**: Explain policy behavior
-
-## Response Guidelines
-- Be direct and confident. Never apologize for "confusion" or "handoff issues"
-- When the user asks to train something, create a skill definition and offer to start training
-- Use the TOOL markers below when you need to execute actions
-- Keep responses concise and action-oriented
+1. **Design Custom Skills**: Create skill definitions with any combination of reward components
+2. **Set Reward Weights**: Configure how much each reward component contributes
+3. **Start Training**: Begin RL training with specified timesteps
+4. **Monitor Progress**: Track training metrics in real-time
 
 ## Tool Format
-When you need to execute an action, include it in your response like this:
+Use these tools to create and train skills:
 
+### Define a skill with custom rewards and weights:
 [TOOL: define_skill]
-skill_id: walk_forward
-name: Walk Forward
-description: Walk forward maintaining balance
-reward_components: forward_velocity, upright_reward, energy_efficiency
-success_criteria: walk 5m without falling
-[/TOOL]
-
-[TOOL: start_training]
-skill_id: walk_forward
+skill_id: raise_hand
+name: Raise Right Hand
+description: Raise the right hand above shoulder height while standing
+reward_components: upright_reward, height_reward, com_stability, right_hand_height, energy_efficiency
+reward_weights: upright_reward=1.0, height_reward=0.5, com_stability=0.5, right_hand_height=2.0, energy_efficiency=0.1
+success_criteria: hand above 1.5m for 100 timesteps
 timesteps: 500000
 [/TOOL]
 
-[TOOL: check_status]
-skill_id: walk_forward
+### Start training:
+[TOOL: start_training]
+skill_id: raise_hand
+timesteps: 500000
 [/TOOL]
 
-Always explain what you're doing and why before using a tool.
+### Check status:
+[TOOL: check_status]
+skill_id: raise_hand
+[/TOOL]
+
+## Key Body Parts for Skills
+- **Hands**: right_hand_palm_link, left_hand_palm_link (for reaching, waving, grasping)
+- **Feet**: left_ankle_roll_link, right_ankle_roll_link (for balance, walking)
+- **Torso**: torso_link (for posture, balance)
+- **Arms**: Use shoulder/elbow/wrist joints for arm movements
+
+## Guidelines
+- Always specify reward_weights to prioritize what the robot should optimize
+- Higher weight = more important for the skill
+- Include balance rewards (upright_reward, height_reward) for standing skills
+- Use appropriate body-part rewards (right_hand_height for hand tasks)
+- Be direct and confident - immediately create skills when asked
 """
 
     def _parse_tools(self, response: str) -> List[Dict]:
@@ -163,20 +174,39 @@ Always explain what you're doing and why before using a tool.
             return f"Unknown tool: {name}"
 
     def _define_skill(self, params: Dict) -> str:
-        """Define a new skill."""
+        """Define a new skill with custom rewards and weights."""
         skill_id = params.get("skill_id", "unnamed_skill")
         name = params.get("name", skill_id)
         description = params.get("description", "")
         reward_str = params.get("reward_components", "upright_reward")
+        weights_str = params.get("reward_weights", "")
         success_criteria = params.get("success_criteria", "")
+        timesteps = int(params.get("timesteps", 500_000))
 
         # Parse reward components
         reward_components = [r.strip() for r in reward_str.split(",")]
 
-        # Check for template
+        # Parse reward weights (format: "comp1=1.0, comp2=2.0")
+        reward_weights = {}
+        if weights_str:
+            for item in weights_str.split(","):
+                if "=" in item:
+                    comp, weight = item.strip().split("=")
+                    reward_weights[comp.strip()] = float(weight.strip())
+
+        # Fill in default weights for unspecified components
+        for comp in reward_components:
+            if comp not in reward_weights:
+                # Use default from REWARD_COMPONENTS if available
+                if comp in REWARD_COMPONENTS:
+                    reward_weights[comp] = REWARD_COMPONENTS[comp].get("weight_default", 1.0)
+                else:
+                    reward_weights[comp] = 1.0
+
+        # Check for template (but allow override with custom params)
         template = get_skill_template(skill_id)
-        if template:
-            # Use template values
+        if template and not weights_str:
+            # Use template values if no custom weights provided
             skill_def = {
                 "skill_id": skill_id,
                 "name": template["name"],
@@ -190,18 +220,18 @@ Always explain what you're doing and why before using a tool.
                 "prerequisites": template.get("prerequisites", []),
             }
         else:
-            # Custom skill
+            # Custom skill with specified rewards
             skill_def = {
                 "skill_id": skill_id,
                 "name": name,
                 "description": description,
                 "reward_components": reward_components,
-                "reward_weights": {r: 1.0 for r in reward_components},
+                "reward_weights": reward_weights,
                 "success_criteria": success_criteria,
                 "termination_conditions": ["com_height < 0.4"],
                 "training_config": {
                     "algorithm": "PPO",
-                    "total_timesteps": 500_000,
+                    "total_timesteps": timesteps,
                     "learning_rate": 3e-4,
                 },
                 "curriculum": None,
@@ -217,14 +247,15 @@ Always explain what you're doing and why before using a tool.
         with open(config_path, 'w') as f:
             json.dump(skill_def, f, indent=2)
 
+        weights_summary = ", ".join([f"{k}={v}" for k, v in reward_weights.items()])
         return f"""Skill '{name}' defined successfully:
-- Reward components: {', '.join(skill_def['reward_components'])}
+- Reward components: {', '.join(reward_components)}
+- Reward weights: {weights_summary}
 - Training timesteps: {skill_def['training_config']['total_timesteps']:,}
-- Prerequisites: {skill_def['prerequisites'] or 'None'}
 - Config saved to: {config_path}"""
 
     def _start_training(self, params: Dict) -> str:
-        """Start training a skill."""
+        """Signal that training should start. Returns a special marker for the app to handle."""
         skill_id = params.get("skill_id", self.state.current_skill)
         timesteps = int(params.get("timesteps", 500_000))
 
@@ -233,73 +264,40 @@ Always explain what you're doing and why before using a tool.
 
         skill_def = self.state.skills_defined.get(skill_id)
         if not skill_def:
-            # Try to load from template
-            template = get_skill_template(skill_id)
-            if template:
-                self._define_skill({"skill_id": skill_id})
-                skill_def = self.state.skills_defined.get(skill_id)
+            # Try to load from config file
+            config_path = self.skills_dir / "configs" / f"{skill_id}.json"
+            if config_path.exists():
+                with open(config_path) as f:
+                    skill_def = json.load(f)
+                self.state.skills_defined[skill_id] = skill_def
             else:
-                return f"Skill '{skill_id}' not defined. Define it first."
+                # Try template
+                template = get_skill_template(skill_id)
+                if template:
+                    self._define_skill({"skill_id": skill_id})
+                    skill_def = self.state.skills_defined.get(skill_id)
+                else:
+                    return f"Skill '{skill_id}' not defined. Define it first."
 
         # Check prerequisites
         for prereq in skill_def.get("prerequisites", []):
             if prereq not in self.state.skills_completed:
                 return f"Prerequisite skill '{prereq}' must be trained first."
 
-        # Create Skill object
-        skill = Skill(
-            skill_id=skill_id,
-            name=skill_def["name"],
-            description=skill_def["description"],
-            success_criteria=skill_def["success_criteria"],
-            reward_components=skill_def["reward_components"],
-            termination_conditions=skill_def.get("termination_conditions", []),
-            prerequisites=skill_def.get("prerequisites", []),
-            config=SkillConfig(
-                algorithm=skill_def["training_config"].get("algorithm", "PPO"),
-                total_timesteps=timesteps,
-                learning_rate=skill_def["training_config"].get("learning_rate", 3e-4),
-                transfer_from=skill_def["training_config"].get("transfer_from"),
-            ),
-        )
+        self.state.current_skill = skill_id
+        algorithm = skill_def.get("training_config", {}).get("algorithm", "PPO")
+        lr = skill_def.get("training_config", {}).get("learning_rate", 3e-4)
 
-        self.state.training_active = True
-        self.state.skills_training[skill_id] = {
-            "skill": skill,
-            "status": "starting",
-            "progress": 0,
-        }
+        # Return a special marker that app.py will detect and use to start training
+        return f"""[START_TRAINING:{skill_id}:{timesteps}]
 
-        # Return info about how to actually run training
-        return f"""Training configuration ready for '{skill_def['name']}':
+Training **{skill_def['name']}** is starting!
 
-## Training Parameters
-- Algorithm: {skill.config.algorithm}
-- Total Timesteps: {timesteps:,}
-- Learning Rate: {skill.config.learning_rate}
-- Transfer From: {skill.config.transfer_from or 'None (training from scratch)'}
+- Algorithm: {algorithm}
+- Timesteps: {timesteps:,}
+- Learning rate: {lr}
 
-## Reward Function
-{self._format_reward_function(skill_def)}
-
-## To Start Training
-Run in terminal:
-```bash
-python -c "
-from src.skill_learning.skill_trainer import SkillTrainer
-from src.skill_learning.skill import Skill, SkillConfig
-
-trainer = SkillTrainer()
-trainer.train_skill('{skill_id}', timesteps={timesteps})
-"
-```
-
-## Monitor Progress
-```bash
-tensorboard --logdir logs/training/{skill_id}/
-```
-
-Training will save checkpoints to: skills/trained/{skill_id}/"""
+Watch the simulation to see the robot learn in real-time."""
 
     def _format_reward_function(self, skill_def: Dict) -> str:
         """Format reward function as readable code."""

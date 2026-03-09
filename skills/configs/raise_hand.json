@@ -1,0 +1,32 @@
+{
+  "skill_id": "raise_hand",
+  "name": "Raise Right Hand",
+  "description": "Raise the right hand above shoulder height while maintaining stable standing posture",
+  "reward_components": [
+    "upright_reward",
+    "height_reward",
+    "com_stability",
+    "right_hand_height",
+    "energy_efficiency",
+    "smoothness"
+  ],
+  "reward_weights": {
+    "upright_reward": 1.0,
+    "height_reward": 0.5,
+    "com_stability": 0.5,
+    "right_hand_height": 3.0,
+    "energy_efficiency": 0.1,
+    "smoothness": 0.2
+  },
+  "success_criteria": "right hand above 1.5m height for 100 consecutive timesteps",
+  "termination_conditions": [
+    "com_height < 0.4"
+  ],
+  "training_config": {
+    "algorithm": "PPO",
+    "total_timesteps": 500000,
+    "learning_rate": 0.0003
+  },
+  "curriculum": null,
+  "prerequisites": []
+}

@@ -19,6 +19,7 @@ import json
 import time
 import io
 import threading
+import queue
 from pathlib import Path
 from datetime import datetime
 
@@ -37,6 +38,7 @@ load_dotenv()
 # Import our modules
 from src.agents.orchestrator_v2 import UnifiedOrchestrator
 from src.robot.robot_spec import SKILL_TEMPLATES, get_robot_spec
+from src.experiments.experiment_runner import train_skill as run_training
 
 app = Flask(__name__)
 
@@ -47,13 +49,107 @@ state = {
     "data": None,
     "renderer": None,
     "policy": None,
+    "vec_normalize": None,  # For observation normalization
     "current_skill": None,
     "running": True,
     "step": 0,
     "messages": [],
     "training_active": False,
     "training_progress": 0,
+    "training_skill": None,
+    "training_timesteps": 0,
+    "training_total": 0,
+    "latest_frame": None,
+    "frame_lock": threading.Lock(),
 }
+
+
+def training_thread(skill_id: str, timesteps: int):
+    """Background thread for training a skill."""
+    # Clear any problematic MuJoCo GL settings for macOS
+    os.environ.pop('MUJOCO_GL', None)
+
+    from stable_baselines3 import PPO
+    from stable_baselines3.common.callbacks import BaseCallback
+
+    state["training_active"] = True
+    state["training_skill"] = skill_id
+    state["training_total"] = timesteps
+    state["training_timesteps"] = 0
+
+    class LiveViewCallback(BaseCallback):
+        """Callback to update training progress and reload policy for viewing."""
+        def __init__(self):
+            super().__init__()
+            self.last_reload = 0
+
+        def _on_step(self) -> bool:
+            state["training_timesteps"] = self.num_timesteps
+
+            # Every 5k steps, save and reload the policy for live viewing
+            if self.num_timesteps - self.last_reload >= 5000:
+                self.last_reload = self.num_timesteps
+                # Save current model and normalization
+                model_path = PROJECT_ROOT / "skills" / "trained" / skill_id
+                model_path.mkdir(parents=True, exist_ok=True)
+                self.model.save(str(model_path / "model.zip"))
+
+                # Save the VecNormalize stats from the training environment
+                try:
+                    self.training_env.save(str(model_path / "vec_normalize.pkl"))
+                except:
+                    pass
+
+                # Reload for viewing (in a thread-safe way)
+                try:
+                    new_policy = PPO.load(str(model_path / "model.zip"))
+                    state["policy"] = new_policy
+                    state["current_skill"] = skill_id
+
+                    # Also reload normalization stats
+                    import pickle
+                    normalize_path = model_path / "vec_normalize.pkl"
+                    if normalize_path.exists():
+                        with open(normalize_path, 'rb') as f:
+                            vec_normalize_data = pickle.load(f)
+                        state["vec_normalize"] = {
+                            "obs_rms_mean": vec_normalize_data.obs_rms.mean,
+                            "obs_rms_var": vec_normalize_data.obs_rms.var,
+                            "clip_obs": vec_normalize_data.clip_obs,
+                            "epsilon": vec_normalize_data.epsilon,
+                        }
+                    print(f"[Training] Step {self.num_timesteps:,} - policy reloaded for viewing")
+                except Exception as e:
+                    print(f"[Training] Failed to reload policy: {e}")
+
+            return True
+
+    callback = LiveViewCallback()
+
+    try:
+        print(f"[Training] Starting {skill_id} for {timesteps:,} timesteps...")
+        result = run_training(skill_id, timesteps, render=False, callback=callback)
+        print(f"[Training] Complete! Result: {result}")
+
+        # Load final trained policy
+        load_skill(skill_id)
+
+    except Exception as e:
+        print(f"[Training] Error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        state["training_active"] = False
+        state["training_skill"] = None
+        # Stop the robot when training ends
+        state["policy"] = None
+        state["vec_normalize"] = None
+        state["current_skill"] = None
+        # Reset the simulation to standing pose
+        mujoco.mj_resetData(state["model"], state["data"])
+        mujoco.mj_forward(state["model"], state["data"])
+        state["step"] = 0
+        print("[Training] Robot stopped and reset")
 
 # HTML Template
 HTML_TEMPLATE = """
@@ -110,15 +206,14 @@ HTML_TEMPLATE = """
             flex: 1;
             background: #0d1117;
             border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
             overflow: hidden;
+            position: relative;
         }
 
         .sim-container img {
-            max-width: 100%;
-            max-height: 100%;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
             border-radius: 4px;
         }
 
@@ -168,8 +263,9 @@ HTML_TEMPLATE = """
 
         .messages {
             flex: 1;
-            overflow-y: auto;
+            overflow-y: scroll;
             padding: 15px;
+            max-height: calc(100vh - 250px);
         }
 
         .message {
@@ -203,6 +299,8 @@ HTML_TEMPLATE = """
             text-align: left;
             font-size: 0.9em;
             line-height: 1.4;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
 
         .bubble pre {
@@ -395,8 +493,8 @@ HTML_TEMPLATE = """
                     <button onclick="sendMessage()" id="send-btn">Send</button>
                 </div>
                 <div class="quick-actions">
-                    <button class="quick-btn" onclick="quickAction('List available skills')">List Skills</button>
-                    <button class="quick-btn" onclick="quickAction('Show the balance skill')">Show Balance</button>
+                    <button class="quick-btn" onclick="quickAction('Train walk_forward 200k')">Train Walking</button>
+                    <button class="quick-btn" onclick="quickAction('Train balance 100k')">Train Balance</button>
                     <button class="quick-btn" onclick="quickAction('Show the walking skill')">Show Walking</button>
                     <button class="quick-btn" onclick="quickAction('Reset simulation')">Reset</button>
                 </div>
@@ -475,8 +573,43 @@ HTML_TEMPLATE = """
                 if (data.skill) {
                     document.getElementById('skill-badge').textContent = data.skill;
                 }
+
+                // Update training progress
+                const trainingBar = document.getElementById('training-bar');
+                const progressFill = document.getElementById('progress-fill');
+                if (data.training_active) {
+                    trainingBar.classList.add('active');
+                    const pct = (data.training_progress / data.training_total * 100).toFixed(1);
+                    progressFill.style.width = pct + '%';
+                    trainingBar.querySelector('small').textContent =
+                        `Training ${data.training_skill}: ${(data.training_progress/1000).toFixed(0)}k / ${(data.training_total/1000).toFixed(0)}k steps (${pct}%)`;
+                } else {
+                    trainingBar.classList.remove('active');
+                }
             } catch (e) {}
         }, 200);
+
+        // Fallback: If MJPEG doesn't load within 3 seconds, switch to polling
+        let mjpegFailed = true;
+        const simImg = document.getElementById('sim-frame');
+
+        simImg.onload = () => { mjpegFailed = false; };
+        simImg.onerror = () => { startPolling(); };
+
+        setTimeout(() => {
+            if (mjpegFailed) {
+                console.log('MJPEG stream not loading, switching to polling mode');
+                startPolling();
+            }
+        }, 3000);
+
+        function startPolling() {
+            simImg.src = '';  // Clear MJPEG stream
+            setInterval(() => {
+                // Add timestamp to prevent caching
+                simImg.src = '/frame?' + Date.now();
+            }, 100);  // 10 FPS polling
+        }
     </script>
 </body>
 </html>
@@ -484,13 +617,23 @@ HTML_TEMPLATE = """
 
 
 def init_simulation():
-    """Initialize MuJoCo simulation."""
-    xml_path = PROJECT_ROOT / "mujoco_menagerie" / "unitree_g1" / "g1_with_hands.xml"
+    """Initialize MuJoCo simulation (model and data only)."""
+    # Use scene file which includes ground plane
+    xml_path = PROJECT_ROOT / "mujoco_menagerie" / "unitree_g1" / "scene_with_hands.xml"
     state["model"] = mujoco.MjModel.from_xml_path(str(xml_path))
     state["data"] = mujoco.MjData(state["model"])
-    state["renderer"] = mujoco.Renderer(state["model"], height=480, width=640)
     mujoco.mj_forward(state["model"], state["data"])
     print("MuJoCo simulation initialized")
+
+
+def init_renderer():
+    """Initialize renderer (must be called from the thread that will use it)."""
+    try:
+        state["renderer"] = mujoco.Renderer(state["model"], height=720, width=1280)
+        print("MuJoCo renderer initialized")
+    except Exception as e:
+        print(f"Error initializing renderer: {e}")
+        raise
 
 
 def init_orchestrator():
@@ -500,12 +643,39 @@ def init_orchestrator():
 
 
 def load_skill(skill_id: str):
-    """Load a trained skill policy."""
-    model_path = PROJECT_ROOT / "skills" / "trained" / skill_id / "model.zip"
+    """Load a trained skill policy and normalization stats."""
+    skill_dir = PROJECT_ROOT / "skills" / "trained" / skill_id
+    model_path = skill_dir / "model.zip"
+    normalize_path = skill_dir / "vec_normalize.pkl"
+
     if model_path.exists():
         from stable_baselines3 import PPO
+        from stable_baselines3.common.vec_env import VecNormalize
+        import pickle
+
         state["policy"] = PPO.load(str(model_path))
         state["current_skill"] = skill_id
+
+        # Load normalization statistics if available
+        if normalize_path.exists():
+            try:
+                with open(normalize_path, 'rb') as f:
+                    vec_normalize_data = pickle.load(f)
+                # Extract the observation normalization parameters
+                state["vec_normalize"] = {
+                    "obs_rms_mean": vec_normalize_data.obs_rms.mean,
+                    "obs_rms_var": vec_normalize_data.obs_rms.var,
+                    "clip_obs": vec_normalize_data.clip_obs,
+                    "epsilon": vec_normalize_data.epsilon,
+                }
+                print(f"Loaded normalization stats for: {skill_id}")
+            except Exception as e:
+                print(f"Warning: Could not load normalization stats: {e}")
+                state["vec_normalize"] = None
+        else:
+            print(f"Warning: No normalization stats found for {skill_id}")
+            state["vec_normalize"] = None
+
         print(f"Loaded skill: {skill_id}")
         return True
     return False
@@ -520,6 +690,23 @@ def get_observation():
     return np.concatenate([qpos, qvel, torso_xmat])
 
 
+def normalize_observation(obs):
+    """Normalize observation using stored VecNormalize statistics."""
+    vec_norm = state.get("vec_normalize")
+    if vec_norm is None:
+        return obs
+
+    # Apply the same normalization as VecNormalize
+    mean = vec_norm["obs_rms_mean"]
+    var = vec_norm["obs_rms_var"]
+    epsilon = vec_norm["epsilon"]
+    clip_obs = vec_norm["clip_obs"]
+
+    normalized = (obs - mean) / np.sqrt(var + epsilon)
+    normalized = np.clip(normalized, -clip_obs, clip_obs)
+    return normalized
+
+
 def step_simulation():
     """Step the simulation."""
     model = state["model"]
@@ -528,7 +715,9 @@ def step_simulation():
 
     if policy is not None:
         obs = get_observation()
-        action, _ = policy.predict(obs, deterministic=True)
+        # Normalize observation to match training distribution
+        obs_normalized = normalize_observation(obs)
+        action, _ = policy.predict(obs_normalized, deterministic=True)
         data.ctrl[:] = action * model.actuator_ctrlrange[:, 1]
     else:
         data.ctrl[:] = 0
@@ -539,12 +728,37 @@ def step_simulation():
     state["step"] += 1
 
 
+def create_placeholder_frame():
+    """Create a placeholder frame while simulation loads."""
+    img = Image.new('RGB', (1280, 720), color=(22, 27, 34))
+    buffer = io.BytesIO()
+    img.save(buffer, format='JPEG', quality=80)
+    return buffer.getvalue()
+
+
 def render_frame():
     """Render current frame as JPEG."""
-    renderer = state["renderer"]
+    renderer = state.get("renderer")
     data = state["data"]
 
-    renderer.update_scene(data)
+    if renderer is None:
+        return create_placeholder_frame()
+
+    # Set up camera to look at the robot
+    camera = state.get("camera")
+    if camera is None:
+        camera = mujoco.MjvCamera()
+        camera.azimuth = 135
+        camera.elevation = -20
+        camera.distance = 3.0
+        camera.lookat[:] = [0, 0, 0.8]
+        state["camera"] = camera
+
+    # Track the robot
+    camera.lookat[0] = data.qpos[0]
+    camera.lookat[1] = data.qpos[1]
+
+    renderer.update_scene(data, camera=camera)
     pixels = renderer.render()
 
     img = Image.fromarray(pixels)
@@ -554,22 +768,20 @@ def render_frame():
 
 
 def generate_frames():
-    """Generator for video stream."""
+    """Generator for video stream - reads from frame buffer."""
+    placeholder = create_placeholder_frame()
+
     while state["running"]:
-        step_simulation()
+        with state["frame_lock"]:
+            frame = state["latest_frame"]
 
-        # Update stats
-        data = state["data"]
-        state["com_height"] = float(data.subtree_com[0][2])
-        state["forward_vel"] = float(data.qvel[0])
-        upright = data.xmat[1].reshape(3, 3)[2, 2]
-        state["reward"] = upright + state["com_height"]
+        if frame is None:
+            frame = placeholder
 
-        frame = render_frame()
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
-        time.sleep(1/30)
+        time.sleep(1/15)  # 15fps to reduce CPU load
 
 
 @app.route('/')
@@ -587,6 +799,18 @@ def video_feed():
     )
 
 
+@app.route('/frame')
+def single_frame():
+    """Get a single frame (fallback for MJPEG issues)."""
+    with state["frame_lock"]:
+        frame = state["latest_frame"]
+
+    if frame is None:
+        frame = create_placeholder_frame()
+
+    return Response(frame, mimetype='image/jpeg')
+
+
 @app.route('/stats')
 def stats():
     """Return simulation stats."""
@@ -596,6 +820,10 @@ def stats():
         "forward_vel": state.get("forward_vel", 0),
         "reward": state.get("reward", 0),
         "skill": state.get("current_skill"),
+        "training_active": state.get("training_active", False),
+        "training_skill": state.get("training_skill"),
+        "training_progress": state.get("training_timesteps", 0),
+        "training_total": state.get("training_total", 0),
     })
 
 
@@ -636,21 +864,145 @@ def chat():
         mujoco.mj_resetData(state["model"], state["data"])
         mujoco.mj_forward(state["model"], state["data"])
         state["step"] = 0
+        state["policy"] = None  # Clear policy so robot stays still
+        state["vec_normalize"] = None  # Clear normalization
+        state["current_skill"] = None
         return jsonify({
-            "response": "Simulation reset. The robot is back to its initial pose.",
-            "skill": state.get("current_skill")
+            "response": "Simulation reset. The robot is standing still. Load a skill to see it move.",
+            "skill": None
         })
 
     if 'list' in lower_msg and 'skill' in lower_msg:
         skills_list = "\n".join([f"- **{k}**: {v['description']}" for k, v in SKILL_TEMPLATES.items()])
         return jsonify({
-            "response": f"**Available Skills:**\n\n{skills_list}\n\nTo train: `python run_orchestrator.py --train <skill_id>`\nTo view: Say 'Show the walking skill'",
+            "response": f"**Available Skills:**\n\n{skills_list}\n\nTo train: Say 'train walk_forward'\nTo view: Say 'show walking skill'",
             "skill": state.get("current_skill")
         })
+
+    # Handle training commands
+    if 'train' in lower_msg or ('yes' in lower_msg and 'train' in message.lower()):
+        if state["training_active"]:
+            progress = state["training_timesteps"]
+            total = state["training_total"]
+            pct = (progress / total * 100) if total > 0 else 0
+            return jsonify({
+                "response": f"Training **{state['training_skill']}** is already in progress: {progress:,}/{total:,} steps ({pct:.1f}%)",
+                "skill": state.get("current_skill")
+            })
+
+        # Parse which skill to train
+        skill_to_train = None
+        timesteps = 100000  # Default
+
+        # Check predefined skills
+        if 'walk' in lower_msg:
+            skill_to_train = 'walk_forward'
+            timesteps = 200000
+        elif 'balance' in lower_msg:
+            skill_to_train = 'balance_stand'
+            timesteps = 100000
+        elif 'jump' in lower_msg:
+            skill_to_train = 'jump'
+            timesteps = 300000
+        elif 'raise' in lower_msg or 'hand' in lower_msg:
+            skill_to_train = 'raise_hand'
+            timesteps = 500000
+        elif 'wave' in lower_msg:
+            skill_to_train = 'wave'
+            timesteps = 300000
+
+        # Check for custom skill configs
+        if skill_to_train is None:
+            configs_dir = PROJECT_ROOT / "skills" / "configs"
+            if configs_dir.exists():
+                for config_file in configs_dir.glob("*.json"):
+                    skill_name = config_file.stem
+                    if skill_name.replace('_', ' ') in lower_msg or skill_name in lower_msg:
+                        skill_to_train = skill_name
+                        # Load timesteps from config
+                        try:
+                            import json as json_module
+                            with open(config_file) as f:
+                                config = json_module.load(f)
+                                timesteps = config.get('training_timesteps', 100000)
+                        except:
+                            pass
+                        break
+
+        # Check for custom timesteps in message
+        import re
+        ts_match = re.search(r'(\d+)\s*k?\s*(steps|timesteps)?', lower_msg)
+        if ts_match:
+            num = int(ts_match.group(1))
+            if 'k' in lower_msg[ts_match.start():ts_match.end()+2]:
+                num *= 1000
+            if num >= 1000:
+                timesteps = num
+
+        if skill_to_train:
+            # Check if resuming from previous training
+            prev_model_path = PROJECT_ROOT / "skills" / "trained" / skill_to_train / "model.zip"
+            prev_metrics_path = PROJECT_ROOT / "skills" / "trained" / skill_to_train / "metrics.json"
+
+            resuming = prev_model_path.exists()
+            prev_timesteps = 0
+            if resuming and prev_metrics_path.exists():
+                try:
+                    import json as json_module
+                    with open(prev_metrics_path) as f:
+                        prev_metrics = json_module.load(f)
+                        prev_timesteps = prev_metrics.get("cumulative_timesteps", 0)
+                except:
+                    pass
+
+            # Start training in background
+            t = threading.Thread(target=training_thread, args=(skill_to_train, timesteps), daemon=True)
+            t.start()
+
+            if resuming:
+                response_msg = f"**Resuming** training for **{skill_to_train}** from {prev_timesteps:,} timesteps (+{timesteps:,} more). Watch the simulation - the policy will update live as training progresses."
+            else:
+                response_msg = f"Started training **{skill_to_train}** for {timesteps:,} timesteps! Watch the simulation - the policy will update live as training progresses."
+
+            return jsonify({
+                "response": response_msg,
+                "skill": skill_to_train
+            })
+        else:
+            # List available skills
+            available = list(SKILL_TEMPLATES.keys())
+            configs_dir = PROJECT_ROOT / "skills" / "configs"
+            if configs_dir.exists():
+                available.extend([f.stem for f in configs_dir.glob("*.json")])
+            skills_str = ", ".join(available)
+            return jsonify({
+                "response": f"Which skill would you like to train? Available: {skills_str}",
+                "skill": state.get("current_skill")
+            })
 
     # Pass to orchestrator for complex queries
     try:
         response = state["orchestrator"].process(message)
+
+        # Check if orchestrator wants to start training
+        import re
+        training_match = re.search(r'\[START_TRAINING:(\w+):(\d+)\]', response)
+        if training_match and not state["training_active"]:
+            skill_id = training_match.group(1)
+            timesteps = int(training_match.group(2))
+
+            # Start training in background
+            t = threading.Thread(target=training_thread, args=(skill_id, timesteps), daemon=True)
+            t.start()
+
+            # Remove the marker from response
+            response = re.sub(r'\[START_TRAINING:\w+:\d+\]\s*', '', response)
+
+            return jsonify({
+                "response": response,
+                "skill": skill_id
+            })
+
         return jsonify({
             "response": response,
             "skill": state.get("current_skill")
@@ -670,6 +1022,62 @@ def load_skill_route(skill_id):
     return jsonify({"success": False, "error": "Skill not found"})
 
 
+def run_flask(port):
+    """Run Flask server in a background thread."""
+    app.run(host='0.0.0.0', port=port, threaded=True, debug=False, use_reloader=False)
+
+
+def main_simulation_loop():
+    """Main thread simulation loop with rendering."""
+    print("Simulation loop running on main thread")
+    reset_delay = 0  # Frames to wait before resetting after fall
+
+    while state["running"]:
+        try:
+            step_simulation()
+
+            # Update stats
+            data = state["data"]
+            com_height = float(data.subtree_com[0][2])
+            state["com_height"] = com_height
+            state["forward_vel"] = float(data.qvel[0])
+
+            # Check if robot is upright
+            torso_xmat = data.xmat[1].reshape(3, 3)
+            upright = torso_xmat[2, 2]  # z-component of z-axis (1.0 = perfectly upright)
+            state["reward"] = upright + com_height
+
+            # Auto-reset if robot fell or tilted too much
+            robot_fell = com_height < 0.4 or upright < 0.3
+
+            if robot_fell:
+                reset_delay += 1
+                # Wait a bit so user can see the fall, then reset
+                if reset_delay > 15:  # ~1 second at 15fps
+                    mujoco.mj_resetData(state["model"], state["data"])
+                    mujoco.mj_forward(state["model"], state["data"])
+                    state["step"] = 0
+                    reset_delay = 0
+                    print("[Viewer] Robot fell - auto reset")
+            else:
+                reset_delay = 0
+
+            # Render and store frame
+            frame = render_frame()
+            with state["frame_lock"]:
+                state["latest_frame"] = frame
+
+            time.sleep(1/15)  # 15fps to reduce CPU load
+        except KeyboardInterrupt:
+            state["running"] = False
+            break
+        except Exception as e:
+            print(f"Simulation error: {e}")
+            import traceback
+            traceback.print_exc()
+            time.sleep(0.1)
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="G1 Robot Web App")
@@ -681,19 +1089,31 @@ def main():
     print("G1 Robot Skill Learning System")
     print("="*50)
 
-    # Initialize
+    # Initialize simulation and renderer on main thread (required for macOS OpenGL)
     print("\nInitializing...")
     init_simulation()
+    init_renderer()
     init_orchestrator()
 
     if args.skill:
         load_skill(args.skill)
 
-    print(f"\nStarting web server...")
-    print(f"Open http://localhost:{args.port} in your browser")
+    # Start Flask in background thread
+    print(f"\nStarting web server on http://localhost:{args.port}")
+    flask_thread = threading.Thread(target=run_flask, args=(args.port,), daemon=True)
+    flask_thread.start()
+
+    print("="*50)
+    print("Open the URL above in your browser")
+    print("Press Ctrl+C to stop")
     print("="*50 + "\n")
 
-    app.run(host='0.0.0.0', port=args.port, threaded=True, debug=False)
+    # Run simulation on main thread (required for OpenGL on macOS)
+    try:
+        main_simulation_loop()
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        state["running"] = False
 
 
 if __name__ == "__main__":

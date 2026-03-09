@@ -151,7 +151,7 @@ HTML_TEMPLATE = """
 
 def load_model():
     """Load the MuJoCo model."""
-    xml_path = PROJECT_ROOT / "mujoco_menagerie" / "unitree_g1" / "g1_with_hands.xml"
+    xml_path = PROJECT_ROOT / "mujoco_menagerie" / "unitree_g1" / "scene_with_hands.xml"
     simulation_state["model"] = mujoco.MjModel.from_xml_path(str(xml_path))
     simulation_state["data"] = mujoco.MjData(simulation_state["model"])
     simulation_state["renderer"] = mujoco.Renderer(
