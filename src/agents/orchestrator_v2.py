@@ -133,6 +133,16 @@ skill_id: raise_hand
 - **Torso**: torso_link (for posture, balance)
 - **Arms**: Use shoulder/elbow/wrist joints for arm movements
 
+## CRITICAL: Skill Naming & Deduplication Rules
+- **NEVER create a new skill when an existing one matches the request.** Before defining a skill, check the skill templates and existing skills list above. If one already covers the request, use start_training on it instead of define_skill.
+- **Be maximally specific with skill names.** Vague names like "jump_skill" or "hand_task" are WRONG. Use precise, descriptive names that specify exactly what body part and motion is involved:
+  - WRONG: "raise_hand" → RIGHT: "raise_right_hand"
+  - WRONG: "jump_skill" → RIGHT: "jump" (matches the existing template)
+  - WRONG: "wave" → RIGHT: "wave_right_hand"
+  - WRONG: "walk" → RIGHT: "walk_forward" (matches existing template)
+- **Disambiguate user requests.** If the user says "raise hand", always pick a specific hand (default to right). If they say "jump", use the existing "jump" skill. If they say "walk", use "walk_forward".
+- **skill_id format:** lowercase_with_underscores, specific body part + specific motion. Examples: raise_right_hand, kick_left_leg, wave_right_hand, crouch_down, stand_up.
+
 ## Guidelines
 - Always specify reward_weights to prioritize what the robot should optimize
 - Higher weight = more important for the skill
@@ -173,8 +183,61 @@ skill_id: raise_hand
         else:
             return f"Unknown tool: {name}"
 
+    def _find_existing_skill(self, skill_id: str) -> Optional[str]:
+        """Check if a skill already exists under this or a similar name.
+
+        Returns the existing skill_id if found, None otherwise.
+        Checks: exact match in templates, configs on disk, and trained models.
+        Also does fuzzy matching to catch variants like 'jump_skill' vs 'jump'.
+        """
+        # Exact match in templates
+        if skill_id in SKILL_TEMPLATES:
+            return skill_id
+
+        # Exact match in configs on disk
+        config_path = self.skills_dir / "configs" / f"{skill_id}.json"
+        if config_path.exists():
+            return skill_id
+
+        # Exact match in trained models
+        trained_path = self.skills_dir / "trained" / skill_id / "model.zip"
+        if trained_path.exists():
+            return skill_id
+
+        # Fuzzy match: strip common suffixes/prefixes and check if a base skill exists
+        # e.g. "jump_skill" -> "jump", "jump_1000" -> "jump"
+        # Also handles "raise_right_hand" matching "raise_hand"
+        all_known = set(SKILL_TEMPLATES.keys())
+
+        configs_dir = self.skills_dir / "configs"
+        if configs_dir.exists():
+            for f in configs_dir.glob("*.json"):
+                all_known.add(f.stem)
+
+        trained_dir = self.skills_dir / "trained"
+        if trained_dir.exists():
+            for d in trained_dir.iterdir():
+                if d.is_dir() and (d / "model.zip").exists():
+                    all_known.add(d.name)
+
+        # Normalize: remove _skill suffix, trailing numbers, underscores
+        def normalize(s: str) -> str:
+            s = re.sub(r'_skill$', '', s)
+            s = re.sub(r'_\d+$', '', s)
+            return s.strip('_')
+
+        norm_new = normalize(skill_id)
+        for existing in all_known:
+            if normalize(existing) == norm_new:
+                return existing
+
+        return None
+
     def _define_skill(self, params: Dict) -> str:
-        """Define a new skill with custom rewards and weights."""
+        """Define a new skill with custom rewards and weights.
+
+        Checks for existing skills first to prevent duplicates.
+        """
         skill_id = params.get("skill_id", "unnamed_skill")
         name = params.get("name", skill_id)
         description = params.get("description", "")
@@ -182,6 +245,25 @@ skill_id: raise_hand
         weights_str = params.get("reward_weights", "")
         success_criteria = params.get("success_criteria", "")
         timesteps = int(params.get("timesteps", 500_000))
+
+        # Check for existing skill before creating a new one
+        existing = self._find_existing_skill(skill_id)
+        if existing and existing != skill_id:
+            # A similar skill already exists under a different name -- use that instead
+            skill_id = existing
+            # Load existing config
+            config_path = self.skills_dir / "configs" / f"{existing}.json"
+            if config_path.exists():
+                with open(config_path) as f:
+                    skill_def = json.load(f)
+                self.state.skills_defined[existing] = skill_def
+                self.state.current_skill = existing
+                trained_path = self.skills_dir / "trained" / existing / "model.zip"
+                has_model = trained_path.exists()
+                return f"""Skill '{existing}' already exists (reusing instead of creating duplicate).
+- Name: {skill_def.get('name', existing)}
+- Trained model: {'yes' if has_model else 'no'}
+- Config: {config_path}"""
 
         # Parse reward components
         reward_components = [r.strip() for r in reward_str.split(",")]
@@ -404,14 +486,32 @@ Watch the simulation to see the robot learn in real-time."""
         return final_response
 
     def _get_state_context(self) -> str:
-        """Get current state as context string."""
+        """Get current state as context string, including existing skills on disk."""
         lines = []
 
         if self.state.current_skill:
             lines.append(f"Current skill focus: {self.state.current_skill}")
 
+        # Always include what's already on disk so the LLM doesn't create duplicates
+        existing_trained = []
+        trained_dir = self.skills_dir / "trained"
+        if trained_dir.exists():
+            for d in sorted(trained_dir.iterdir()):
+                if d.is_dir() and (d / "model.zip").exists():
+                    existing_trained.append(d.name)
+        if existing_trained:
+            lines.append(f"Already trained skills (DO NOT recreate): {', '.join(existing_trained)}")
+
+        existing_configs = []
+        configs_dir = self.skills_dir / "configs"
+        if configs_dir.exists():
+            for f in sorted(configs_dir.glob("*.json")):
+                existing_configs.append(f.stem)
+        if existing_configs:
+            lines.append(f"Existing skill configs: {', '.join(existing_configs)}")
+
         if self.state.skills_defined:
-            lines.append(f"Defined skills: {', '.join(self.state.skills_defined.keys())}")
+            lines.append(f"Session-defined skills: {', '.join(self.state.skills_defined.keys())}")
 
         if self.state.skills_training:
             lines.append(f"Training: {', '.join(self.state.skills_training.keys())}")

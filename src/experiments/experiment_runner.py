@@ -21,7 +21,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import torch
 # Limit CPU threads to reduce load
-torch.set_num_threads(2)
+torch.set_num_threads(8)
 
 import gymnasium as gym
 import mujoco
@@ -52,6 +52,8 @@ from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback,
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize, SubprocVecEnv
 from stable_baselines3.common.monitor import Monitor
 
+from src.utils.video_recorder import VideoRecorderCallback
+
 try:
     import wandb
     from wandb.integration.sb3 import WandbCallback
@@ -74,13 +76,13 @@ class ExperimentConfig:
     algorithm: str = "PPO"
     total_timesteps: int = 500_000
     learning_rate: float = 3e-4
-    batch_size: int = 64
-    n_envs: int = 1  # Single environment (lowest CPU usage)
+    batch_size: int = 256
+    n_envs: int = 4  # Parallel environments for faster training
     gamma: float = 0.99
 
     # Network architecture
     policy_type: str = "MlpPolicy"
-    hidden_sizes: List[int] = field(default_factory=lambda: [256, 256])
+    hidden_sizes: List[int] = field(default_factory=lambda: [512, 512])
 
     # Reward configuration
     reward_components: List[str] = field(default_factory=list)
@@ -90,10 +92,11 @@ class ExperimentConfig:
     max_episode_steps: int = 1000
     target_velocity: float = 0.5  # For walking skills
 
-    # Checkpointing
+    # Checkpointing & recording
     save_freq: int = 50_000
     eval_freq: int = 10_000
     n_eval_episodes: int = 5
+    video_freq: int = 100_000  # Record a video every N timesteps
 
     # Transfer learning
     transfer_from: Optional[str] = None
@@ -568,9 +571,6 @@ class ExperimentRunner:
         else:
             env = DummyVecEnv([self._make_env(config)])
 
-        # Normalize observations and rewards
-        env = VecNormalize(env, norm_obs=True, norm_reward=True, clip_obs=10.0)
-
         # Create or load model
         model = None
         AlgClass = {"PPO": PPO, "SAC": SAC, "TD3": TD3}[config.algorithm]
@@ -580,18 +580,30 @@ class ExperimentRunner:
         resume_normalize_path = self.skills_dir / "trained" / config.skill_id / "vec_normalize.pkl"
         if resume_path.exists():
             print(f"Resuming training from previous checkpoint: {config.skill_id}")
-            model = AlgClass.load(str(resume_path), env=env)
-            # Also load the VecNormalize stats if available
+            # Load VecNormalize stats BEFORE loading the model, so the model
+            # binds to the env with correct normalization stats
             if resume_normalize_path.exists():
-                env = VecNormalize.load(str(resume_normalize_path), env.venv)
+                env = VecNormalize.load(str(resume_normalize_path), env)
                 env.training = True  # Continue updating stats
                 print(f"Loaded normalization stats from previous training")
+            else:
+                env = VecNormalize(env, norm_obs=True, norm_reward=True, clip_obs=10.0)
+            model = AlgClass.load(str(resume_path), env=env)
+        else:
+            # No resume -- fresh VecNormalize
+            env = VecNormalize(env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
         # If no resume, check for transfer learning from another skill
         if model is None and config.transfer_from:
             transfer_path = self.skills_dir / "trained" / config.transfer_from / "model.zip"
+            transfer_normalize_path = self.skills_dir / "trained" / config.transfer_from / "vec_normalize.pkl"
             if transfer_path.exists():
                 print(f"Loading pretrained model from: {config.transfer_from}")
+                # Load transfer source's normalization stats too
+                if transfer_normalize_path.exists():
+                    env = VecNormalize.load(str(transfer_normalize_path), env.venv)
+                    env.training = True
+                    print(f"Loaded normalization stats from: {config.transfer_from}")
                 model = AlgClass.load(str(transfer_path), env=env)
 
         if model is None:
@@ -625,6 +637,11 @@ class ExperimentRunner:
                 save_path=str(exp_dir / "checkpoints"),
                 name_prefix="model",
             ),
+            VideoRecorderCallback(
+                video_dir=exp_dir / "videos",
+                record_freq=config.video_freq,
+                max_episode_steps=config.max_episode_steps,
+            ),
         ]
 
         # Add W&B callback if available
@@ -650,9 +667,22 @@ class ExperimentRunner:
                 progress_bar=True,
             )
 
-            # Save final model
+            # Save final model (with backup to prevent overwriting a good model with a bad one)
             model_path = self.skills_dir / "trained" / config.skill_id
             model_path.mkdir(parents=True, exist_ok=True)
+
+            # Back up previous model before overwriting
+            prev_model = model_path / "model.zip"
+            prev_normalize = model_path / "vec_normalize.pkl"
+            if prev_model.exists():
+                import shutil
+                backup_dir = model_path / "backup"
+                backup_dir.mkdir(exist_ok=True)
+                shutil.copy2(str(prev_model), str(backup_dir / "model.zip"))
+                if prev_normalize.exists():
+                    shutil.copy2(str(prev_normalize), str(backup_dir / "vec_normalize.pkl"))
+                print(f"Previous model backed up to: {backup_dir}")
+
             model.save(str(model_path / "model.zip"))
             env.save(str(model_path / "vec_normalize.pkl"))
 
@@ -680,6 +710,16 @@ class ExperimentRunner:
                 json.dump(metrics, f, indent=2)
 
             print(f"Cumulative training: {metrics['cumulative_timesteps']:,} timesteps")
+
+            # Copy videos to the skill's trained directory for easy access
+            import shutil
+            videos_src = exp_dir / "videos"
+            if videos_src.exists():
+                videos_dst = model_path / "videos"
+                videos_dst.mkdir(exist_ok=True)
+                for vid in sorted(videos_src.glob("*.mp4")):
+                    shutil.copy2(str(vid), str(videos_dst / vid.name))
+                print(f"Videos copied to: {videos_dst}")
 
             # Log final metrics to W&B
             if WANDB_AVAILABLE and wandb_run is not None:

@@ -428,7 +428,6 @@ HTML_TEMPLATE = """
         <!-- Simulation Panel -->
         <div class="sim-panel">
             <div class="sim-header">
-                <h1>Unitree G1 Humanoid</h1>
                 <span class="skill-badge" id="skill-badge">No Skill</span>
             </div>
 
@@ -1081,7 +1080,7 @@ def main_simulation_loop():
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="G1 Robot Web App")
-    parser.add_argument("--port", type=int, default=5000, help="Port to serve on")
+    parser.add_argument("--port", type=int, default=8080, help="Port to serve on")
     parser.add_argument("--skill", type=str, help="Initial skill to load")
     args = parser.parse_args()
 
