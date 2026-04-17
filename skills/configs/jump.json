@@ -1,0 +1,34 @@
+{
+  "skill_id": "jump",
+  "name": "Vertical Jump",
+  "description": "Perform a vertical jump and land stably",
+  "reward_components": [
+    "jump_height",
+    "landing_stability",
+    "upright_reward",
+    "fall_penalty"
+  ],
+  "reward_weights": {
+    "jump_height": 5.0,
+    "landing_stability": 3.0,
+    "upright_reward": 1.0,
+    "fall_penalty": 1.0
+  },
+  "success_criteria": "achieve jump height > 0.1m and land without falling",
+  "termination_conditions": [
+    "com_height < 0.3",
+    "episode_length > 500"
+  ],
+  "training_config": {
+    "algorithm": "PPO",
+    "total_timesteps": 2000000,
+    "learning_rate": 5e-05,
+    "transfer_from": "balance_stand"
+  },
+  "curriculum": [
+    {"stage": 1, "target_height": 0.05, "max_steps": 500000},
+    {"stage": 2, "target_height": 0.1, "max_steps": 750000},
+    {"stage": 3, "target_height": 0.15, "max_steps": 750000}
+  ],
+  "prerequisites": ["balance_stand"]
+}

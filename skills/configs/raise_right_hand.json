@@ -1,5 +1,5 @@
 {
-  "skill_id": "raise_hand",
+  "skill_id": "raise_right_hand",
   "name": "Raise Right Hand",
   "description": "Raise the right hand above shoulder height while maintaining stable standing posture",
   "reward_components": [
@@ -24,7 +24,7 @@
   ],
   "training_config": {
     "algorithm": "PPO",
-    "total_timesteps": 500000,
+    "total_timesteps": 2000000,
     "learning_rate": 0.0003
   },
   "curriculum": null,
