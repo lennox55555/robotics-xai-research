@@ -20,8 +20,9 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import torch
-# Limit CPU threads to reduce load
-torch.set_num_threads(8)
+# M4 Max: 12 performance cores, 4 efficiency cores
+# Use 10 threads for PyTorch (leave headroom for MuJoCo envs and OS)
+torch.set_num_threads(10)
 
 import gymnasium as gym
 import mujoco
@@ -76,8 +77,8 @@ class ExperimentConfig:
     algorithm: str = "PPO"
     total_timesteps: int = 500_000
     learning_rate: float = 3e-4
-    batch_size: int = 256
-    n_envs: int = 4  # Parallel environments for faster training
+    batch_size: int = 512
+    n_envs: int = 4  # SubprocVecEnv: 4 is optimal on macOS (IPC overhead limits scaling)
     gamma: float = 0.99
 
     # Network architecture
@@ -91,6 +92,8 @@ class ExperimentConfig:
     # Environment
     max_episode_steps: int = 1000
     target_velocity: float = 0.5  # For walking skills
+    min_com_height: float = 0.4  # Termination threshold for COM height
+    min_upright: float = 0.3  # Termination threshold for upright (cosine of tilt)
 
     # Checkpointing & recording
     save_freq: int = 50_000
@@ -308,20 +311,71 @@ class G1SkillEnv(gym.Env):
                 except:
                     pass
 
+            elif comp_name == "foot_clearance":
+                # Reward lifting feet during swing phase
+                try:
+                    left_foot_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "left_ankle_roll_link")
+                    right_foot_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "right_ankle_roll_link")
+                    if left_foot_id >= 0 and right_foot_id >= 0:
+                        left_foot_z = self.data.xpos[left_foot_id][2]
+                        right_foot_z = self.data.xpos[right_foot_id][2]
+                        # Reward whichever foot is higher (swing foot)
+                        max_foot_height = max(left_foot_z, right_foot_z)
+                        clearance_threshold = 0.05  # 5cm clearance target
+                        reward += weight * min(max(0, max_foot_height - clearance_threshold), 0.2)
+                except:
+                    pass
+
+            elif comp_name == "joint_limit_penalty":
+                # Penalize joints approaching their limits
+                for i in range(self.model.njnt):
+                    if self.model.jnt_limited[i]:
+                        jnt_range = self.model.jnt_range[i]
+                        qpos_idx = self.model.jnt_qposadr[i]
+                        jnt_val = self.data.qpos[qpos_idx]
+                        range_width = jnt_range[1] - jnt_range[0]
+                        if range_width > 0:
+                            # How close to limit (0=center, 1=at limit)
+                            margin = 0.1 * range_width
+                            if jnt_val < jnt_range[0] + margin:
+                                reward -= weight * ((jnt_range[0] + margin - jnt_val) / margin) ** 2
+                            elif jnt_val > jnt_range[1] - margin:
+                                reward -= weight * ((jnt_val - jnt_range[1] + margin) / margin) ** 2
+
+            elif comp_name == "self_collision_penalty":
+                # Penalize self-collisions
+                n_contacts = self.data.ncon
+                self_collisions = 0
+                for i in range(n_contacts):
+                    contact = self.data.contact[i]
+                    geom1 = contact.geom1
+                    geom2 = contact.geom2
+                    # Both geoms belong to the robot (not the floor)
+                    body1 = self.model.geom_bodyid[geom1]
+                    body2 = self.model.geom_bodyid[geom2]
+                    if body1 > 0 and body2 > 0:  # body 0 is world
+                        self_collisions += 1
+                reward -= weight * 0.1 * self_collisions
+
+            elif comp_name == "yaw_rotation":
+                # Reward for yaw rotation (turning)
+                yaw_vel = self.data.qvel[5]  # Root yaw angular velocity
+                reward += weight * yaw_vel  # Positive = left turn
+
         return reward
 
     def _is_terminated(self) -> bool:
-        """Check termination conditions."""
+        """Check termination conditions using per-skill thresholds from config."""
         com_height = self.data.subtree_com[0][2]
 
-        # Fell down
-        if com_height < 0.4:
+        # Fell down (threshold from config, defaults to 0.4)
+        if com_height < self.config.min_com_height:
             return True
 
-        # Torso tilted too much
+        # Torso tilted too much (threshold from config, defaults to 0.3)
         torso_xmat = self.data.xmat[1].reshape(3, 3)
         upright = torso_xmat[2, 2]
-        if upright < 0.3:  # More than ~70 degrees from vertical
+        if upright < self.config.min_upright:
             return True
 
         return False
@@ -455,6 +509,63 @@ class ProgressCallback(BaseCallback):
         print(f"{'='*60}\n")
 
 
+class CurriculumCallback(BaseCallback):
+    """Adjusts training difficulty at curriculum stage boundaries.
+
+    Reads config.curriculum stages and updates target_velocity (or other
+    parameters) in the environment config when the timestep crosses a
+    stage boundary. The env's _get_reward() already reads config.target_velocity
+    each step, so mutating the config is enough.
+    """
+
+    def __init__(self, config: ExperimentConfig, verbose: int = 1):
+        super().__init__(verbose)
+        self.config = config
+        self.stages = config.curriculum or []
+        self._current_stage = 0
+        self._stage_boundaries = []
+
+        # Compute cumulative timestep boundaries
+        cumulative = 0
+        for stage in self.stages:
+            cumulative += stage.get("max_steps", 0)
+            self._stage_boundaries.append(cumulative)
+
+    def _on_step(self) -> bool:
+        if not self.stages or self._current_stage >= len(self.stages):
+            return True
+
+        # Check if we've crossed into the next stage
+        while (self._current_stage < len(self._stage_boundaries) and
+               self.num_timesteps >= self._stage_boundaries[self._current_stage]):
+            self._current_stage += 1
+
+        if self._current_stage < len(self.stages):
+            stage = self.stages[self._current_stage]
+            if "target_velocity" in stage:
+                self.config.target_velocity = stage["target_velocity"]
+            if "target_height" in stage:
+                # Store for jump reward computation
+                self.config.target_velocity = stage["target_height"]  # reuse field
+
+        return True
+
+    def _on_training_start(self):
+        if self.stages and self.verbose:
+            print(f"[Curriculum] {len(self.stages)} stages configured")
+            for i, stage in enumerate(self.stages):
+                params = {k: v for k, v in stage.items() if k not in ("stage", "max_steps")}
+                print(f"  Stage {i+1}: {stage.get('max_steps', 0):,} steps, {params}")
+            # Set initial stage params
+            if self.stages:
+                stage = self.stages[0]
+                if "target_velocity" in stage:
+                    self.config.target_velocity = stage["target_velocity"]
+                if "target_height" in stage:
+                    self.config.target_velocity = stage["target_height"]
+                print(f"[Curriculum] Starting at stage 1")
+
+
 class ExperimentRunner:
     """
     Runs training experiments for G1 robot skills.
@@ -496,6 +607,24 @@ class ExperimentRunner:
         if not template:
             raise ValueError(f"Unknown skill template: {skill_id}. No template or config found.")
 
+        # Parse termination conditions from template strings
+        min_com_height = 0.4  # default
+        min_upright = 0.3     # default
+        for cond in template.get("termination_conditions", []):
+            if "com_height" in cond:
+                try:
+                    min_com_height = float(cond.split("<")[-1].strip())
+                except (ValueError, IndexError):
+                    pass
+            elif "torso_angle" in cond:
+                try:
+                    # torso_angle > X means terminate if tilt exceeds X rad
+                    # Convert to upright threshold: cos(X)
+                    angle = float(cond.split(">")[-1].strip())
+                    min_upright = float(np.cos(angle))
+                except (ValueError, IndexError):
+                    pass
+
         config = ExperimentConfig(
             skill_id=skill_id,
             name=template["name"],
@@ -507,6 +636,8 @@ class ExperimentRunner:
             learning_rate=template["training_config"].get("learning_rate", 3e-4),
             transfer_from=template["training_config"].get("transfer_from"),
             curriculum=template.get("curriculum"),
+            min_com_height=min_com_height,
+            min_upright=min_upright,
         )
 
         # Apply overrides
@@ -600,8 +731,12 @@ class ExperimentRunner:
             if transfer_path.exists():
                 print(f"Loading pretrained model from: {config.transfer_from}")
                 # Load transfer source's normalization stats too
+                # env here is already a raw VecEnv (wrapped with fresh VecNormalize above)
+                # We need to replace it with the transfer source's VecNormalize
                 if transfer_normalize_path.exists():
-                    env = VecNormalize.load(str(transfer_normalize_path), env.venv)
+                    # env is a VecNormalize wrapping the raw venv -- unwrap and re-wrap
+                    raw_venv = env.venv
+                    env = VecNormalize.load(str(transfer_normalize_path), raw_venv)
                     env.training = True
                     print(f"Loaded normalization stats from: {config.transfer_from}")
                 model = AlgClass.load(str(transfer_path), env=env)
@@ -643,6 +778,10 @@ class ExperimentRunner:
                 max_episode_steps=config.max_episode_steps,
             ),
         ]
+
+        # Add curriculum callback if stages are defined
+        if config.curriculum:
+            callbacks.append(CurriculumCallback(config))
 
         # Add W&B callback if available
         if WANDB_AVAILABLE and wandb_run is not None:

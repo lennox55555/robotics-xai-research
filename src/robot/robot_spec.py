@@ -340,6 +340,14 @@ REWARD_COMPONENTS = {
         "weight_default": 1.0,
         "relevant_skills": ["grasp", "fist"],
     },
+
+    # Rotation rewards
+    "yaw_rotation": {
+        "description": "Reward for yaw rotation (turning left/right)",
+        "formula": "root_yaw_angular_velocity",
+        "weight_default": 2.0,
+        "relevant_skills": ["turn_left", "turn_right"],
+    },
 }
 
 
@@ -398,12 +406,14 @@ SKILL_TEMPLATES = {
     "turn_left": {
         "name": "Turn Left",
         "description": "Turn left while maintaining balance",
-        "reward_components": ["upright_reward", "energy_efficiency", "fall_penalty"],
+        "reward_components": ["upright_reward", "height_reward", "yaw_rotation", "energy_efficiency", "fall_penalty"],
+        "reward_weights": {"upright_reward": 1.0, "height_reward": 0.5, "yaw_rotation": 2.0, "energy_efficiency": 0.1, "fall_penalty": 1.0},
         "success_criteria": "complete 90 degree turn without falling",
         "termination_conditions": ["com_height < 0.5"],
         "training_config": {
             "algorithm": "PPO",
-            "total_timesteps": 300_000,
+            "total_timesteps": 1_000_000,
+            "learning_rate": 3e-4,
             "transfer_from": "balance_stand",
         },
         "prerequisites": ["balance_stand"],
@@ -460,6 +470,21 @@ SKILL_TEMPLATES = {
             {"stage": 3, "target_velocity": 2.0, "max_steps": 1_000_000},
         ],
         "prerequisites": ["walk_forward"],
+    },
+    "wave_right_hand": {
+        "name": "Wave Right Hand",
+        "description": "Wave the right hand above shoulder height while standing",
+        "reward_components": ["right_hand_height", "wave_motion", "upright_reward", "height_reward", "smoothness", "fall_penalty"],
+        "reward_weights": {"right_hand_height": 2.0, "wave_motion": 3.0, "upright_reward": 1.0, "height_reward": 0.5, "smoothness": 0.2, "fall_penalty": 1.0},
+        "success_criteria": "right hand above 1.2m with lateral oscillation for 200 timesteps",
+        "termination_conditions": ["com_height < 0.4"],
+        "training_config": {
+            "algorithm": "PPO",
+            "total_timesteps": 1_500_000,
+            "learning_rate": 3e-4,
+            "transfer_from": "raise_right_hand",
+        },
+        "prerequisites": ["raise_right_hand"],
     },
 }
 

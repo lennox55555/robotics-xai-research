@@ -100,24 +100,9 @@ def training_thread(skill_id: str, timesteps: int):
                 except:
                     pass
 
-                # Reload for viewing (in a thread-safe way)
+                # Reload for viewing using load_skill (proper VecNormalize handling)
                 try:
-                    new_policy = PPO.load(str(model_path / "model.zip"))
-                    state["policy"] = new_policy
-                    state["current_skill"] = skill_id
-
-                    # Also reload normalization stats
-                    import pickle
-                    normalize_path = model_path / "vec_normalize.pkl"
-                    if normalize_path.exists():
-                        with open(normalize_path, 'rb') as f:
-                            vec_normalize_data = pickle.load(f)
-                        state["vec_normalize"] = {
-                            "obs_rms_mean": vec_normalize_data.obs_rms.mean,
-                            "obs_rms_var": vec_normalize_data.obs_rms.var,
-                            "clip_obs": vec_normalize_data.clip_obs,
-                            "epsilon": vec_normalize_data.epsilon,
-                        }
+                    load_skill(skill_id)
                     print(f"[Training] Step {self.num_timesteps:,} - policy reloaded for viewing")
                 except Exception as e:
                     print(f"[Training] Failed to reload policy: {e}")
@@ -642,39 +627,42 @@ def init_orchestrator():
 
 
 def load_skill(skill_id: str):
-    """Load a trained skill policy and normalization stats."""
+    """Load a trained skill policy and normalization stats.
+
+    Uses VecNormalize.load() properly instead of manual pickle extraction.
+    """
     skill_dir = PROJECT_ROOT / "skills" / "trained" / skill_id
     model_path = skill_dir / "model.zip"
     normalize_path = skill_dir / "vec_normalize.pkl"
 
     if model_path.exists():
         from stable_baselines3 import PPO
-        from stable_baselines3.common.vec_env import VecNormalize
-        import pickle
+        from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
-        state["policy"] = PPO.load(str(model_path))
         state["current_skill"] = skill_id
 
-        # Load normalization statistics if available
+        # Load VecNormalize properly by wrapping a dummy env
         if normalize_path.exists():
             try:
-                with open(normalize_path, 'rb') as f:
-                    vec_normalize_data = pickle.load(f)
-                # Extract the observation normalization parameters
-                state["vec_normalize"] = {
-                    "obs_rms_mean": vec_normalize_data.obs_rms.mean,
-                    "obs_rms_var": vec_normalize_data.obs_rms.var,
-                    "clip_obs": vec_normalize_data.clip_obs,
-                    "epsilon": vec_normalize_data.epsilon,
-                }
-                print(f"Loaded normalization stats for: {skill_id}")
+                from src.experiments.experiment_runner import G1SkillEnv, ExperimentConfig
+                # Create a minimal config for the dummy env
+                dummy_config = ExperimentConfig(
+                    skill_id=skill_id, name=skill_id, description="",
+                    reward_components=["upright_reward"], reward_weights={"upright_reward": 1.0},
+                )
+                dummy_env = DummyVecEnv([lambda: G1SkillEnv(dummy_config)])
+                vec_env = VecNormalize.load(str(normalize_path), dummy_env)
+                vec_env.training = False  # Inference mode -- don't update stats
+                state["vec_env"] = vec_env
+                print(f"Loaded VecNormalize env for: {skill_id}")
             except Exception as e:
-                print(f"Warning: Could not load normalization stats: {e}")
-                state["vec_normalize"] = None
+                print(f"Warning: Could not load VecNormalize env: {e}")
+                state["vec_env"] = None
         else:
             print(f"Warning: No normalization stats found for {skill_id}")
-            state["vec_normalize"] = None
+            state["vec_env"] = None
 
+        state["policy"] = PPO.load(str(model_path))
         print(f"Loaded skill: {skill_id}")
         return True
     return False
@@ -690,20 +678,11 @@ def get_observation():
 
 
 def normalize_observation(obs):
-    """Normalize observation using stored VecNormalize statistics."""
-    vec_norm = state.get("vec_normalize")
-    if vec_norm is None:
+    """Normalize observation using loaded VecNormalize environment."""
+    vec_env = state.get("vec_env")
+    if vec_env is None:
         return obs
-
-    # Apply the same normalization as VecNormalize
-    mean = vec_norm["obs_rms_mean"]
-    var = vec_norm["obs_rms_var"]
-    epsilon = vec_norm["epsilon"]
-    clip_obs = vec_norm["clip_obs"]
-
-    normalized = (obs - mean) / np.sqrt(var + epsilon)
-    normalized = np.clip(normalized, -clip_obs, clip_obs)
-    return normalized
+    return vec_env.normalize_obs(obs)
 
 
 def step_simulation():

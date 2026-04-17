@@ -1,0 +1,33 @@
+{
+  "skill_id": "wave_right_hand",
+  "name": "Wave Right Hand",
+  "description": "Wave the right hand above shoulder height while standing",
+  "reward_components": [
+    "right_hand_height",
+    "wave_motion",
+    "upright_reward",
+    "height_reward",
+    "smoothness",
+    "fall_penalty"
+  ],
+  "reward_weights": {
+    "right_hand_height": 2.0,
+    "wave_motion": 3.0,
+    "upright_reward": 1.0,
+    "height_reward": 0.5,
+    "smoothness": 0.2,
+    "fall_penalty": 1.0
+  },
+  "success_criteria": "right hand above 1.2m with lateral oscillation for 200 timesteps",
+  "termination_conditions": [
+    "com_height < 0.4"
+  ],
+  "training_config": {
+    "algorithm": "PPO",
+    "total_timesteps": 1500000,
+    "learning_rate": 0.0003,
+    "transfer_from": "raise_right_hand"
+  },
+  "curriculum": null,
+  "prerequisites": ["raise_right_hand"]
+}

@@ -1,0 +1,110 @@
+{
+  "compositional_prompts": [
+    {
+      "id": 1,
+      "prompt": "Walk forward then stop and balance",
+      "skills_combined": ["walk_forward", "balance_stand"],
+      "success_criteria": {
+        "walk_distance_m": 2.0,
+        "final_stand_steps": 200
+      },
+      "max_steps": 2000
+    },
+    {
+      "id": 2,
+      "prompt": "Walk forward and raise your right hand",
+      "skills_combined": ["walk_forward", "raise_right_hand"],
+      "success_criteria": {
+        "walk_distance_m": 1.0,
+        "hand_height_m": 1.2
+      },
+      "max_steps": 2000
+    },
+    {
+      "id": 3,
+      "prompt": "Jump then wave",
+      "skills_combined": ["jump", "wave_right_hand"],
+      "success_criteria": {
+        "jump_height_m": 0.05,
+        "wave_oscillation_detected": true
+      },
+      "max_steps": 2000
+    },
+    {
+      "id": 4,
+      "prompt": "Turn left and walk forward",
+      "skills_combined": ["turn_left", "walk_forward"],
+      "success_criteria": {
+        "turn_degrees": 45,
+        "walk_distance_m": 1.0
+      },
+      "max_steps": 2000
+    },
+    {
+      "id": 5,
+      "prompt": "Raise your right hand while standing still",
+      "skills_combined": ["balance_stand", "raise_right_hand"],
+      "success_criteria": {
+        "hand_height_m": 1.5,
+        "com_velocity_max": 0.1
+      },
+      "max_steps": 1500
+    },
+    {
+      "id": 6,
+      "prompt": "Wave while walking forward",
+      "skills_combined": ["walk_forward", "wave_right_hand"],
+      "success_criteria": {
+        "walk_distance_m": 1.0,
+        "wave_oscillation_detected": true
+      },
+      "max_steps": 2000
+    },
+    {
+      "id": 7,
+      "prompt": "Jump three times",
+      "skills_combined": ["jump", "jump", "jump"],
+      "success_criteria": {
+        "distinct_jumps": 3
+      },
+      "max_steps": 2000
+    },
+    {
+      "id": 8,
+      "prompt": "Walk forward, stop, and turn left",
+      "skills_combined": ["walk_forward", "balance_stand", "turn_left"],
+      "success_criteria": {
+        "walk_distance_m": 1.0,
+        "stop_steps": 100,
+        "turn_degrees": 45
+      },
+      "max_steps": 2000
+    },
+    {
+      "id": 9,
+      "prompt": "Raise both hands",
+      "skills_combined": ["raise_right_hand"],
+      "success_criteria": {
+        "right_hand_height_m": 1.2,
+        "left_hand_height_m": 1.2
+      },
+      "max_steps": 1500,
+      "note": "Tests implicit left hand generalization from right hand training"
+    },
+    {
+      "id": 10,
+      "prompt": "Walk backward",
+      "skills_combined": [],
+      "success_criteria": {
+        "backward_distance_m": 0.5
+      },
+      "max_steps": 1500,
+      "note": "Zero-shot: never trained on backward walking"
+    }
+  ],
+  "evaluation_config": {
+    "episodes_per_prompt": 50,
+    "record_video": true,
+    "partial_credit": true
+  }
+}
