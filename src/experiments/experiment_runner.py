@@ -362,6 +362,16 @@ class G1SkillEnv(gym.Env):
                 yaw_vel = self.data.qvel[5]  # Root yaw angular velocity
                 reward += weight * yaw_vel  # Positive = left turn
 
+            elif comp_name == "squat_depth":
+                # Reward for lowering COM to squat height (~0.55m)
+                target_squat = 0.55
+                squat_error = abs(com_height - target_squat)
+                reward += weight * np.exp(-5 * squat_error)
+
+            elif comp_name == "squat_upright":
+                # Reward staying upright during squat (stricter than general upright)
+                reward += weight * max(0, upright - 0.8)
+
         return reward
 
     def _is_terminated(self) -> bool:
@@ -413,6 +423,17 @@ class G1SkillEnv(gym.Env):
         # Scale action to actuator range
         ctrl = action * self.model.actuator_ctrlrange[:, 1]
         self.data.ctrl[:] = ctrl
+
+        # Apply random perturbation forces to the torso to train balance recovery.
+        # Small random pushes every ~50 steps (10% chance per step).
+        if np.random.random() < 0.10:
+            # Apply force to torso body (body index 1 in full model)
+            # xfrc_applied is [nbody, 6] -- (force_xyz, torque_xyz)
+            push_force = np.random.uniform(-30, 30, size=3)  # Newtons
+            push_torque = np.random.uniform(-5, 5, size=3)
+            self.data.xfrc_applied[1] = np.concatenate([push_force, push_torque])
+        else:
+            self.data.xfrc_applied[1] = 0
 
         # Step simulation
         for _ in range(self.frame_skip):

@@ -348,6 +348,20 @@ REWARD_COMPONENTS = {
         "weight_default": 2.0,
         "relevant_skills": ["turn_left", "turn_right"],
     },
+
+    # Squat rewards
+    "squat_depth": {
+        "description": "Reward for lowering COM to squat position (~0.55m)",
+        "formula": "exp(-5 * |com_height - 0.55|)",
+        "weight_default": 3.0,
+        "relevant_skills": ["squat"],
+    },
+    "squat_upright": {
+        "description": "Reward for staying upright during squat (stricter threshold)",
+        "formula": "max(0, upright - 0.8)",
+        "weight_default": 2.0,
+        "relevant_skills": ["squat"],
+    },
 }
 
 
@@ -485,6 +499,21 @@ SKILL_TEMPLATES = {
             "transfer_from": "raise_right_hand",
         },
         "prerequisites": ["raise_right_hand"],
+    },
+    "squat": {
+        "name": "Squat",
+        "description": "Lower into a squat position and hold, then return to standing",
+        "reward_components": ["squat_depth", "squat_upright", "upright_reward", "com_stability", "energy_efficiency", "smoothness", "fall_penalty"],
+        "reward_weights": {"squat_depth": 3.0, "squat_upright": 2.0, "upright_reward": 1.0, "com_stability": 0.3, "energy_efficiency": 0.1, "smoothness": 0.2, "fall_penalty": 1.0},
+        "success_criteria": "lower COM to 0.55m and hold for 200 timesteps without falling",
+        "termination_conditions": ["com_height < 0.3", "torso_angle > 0.8"],
+        "training_config": {
+            "algorithm": "PPO",
+            "total_timesteps": 5_000_000,
+            "learning_rate": 3e-4,
+            "transfer_from": "balance_stand",
+        },
+        "prerequisites": ["balance_stand"],
     },
 }
 
