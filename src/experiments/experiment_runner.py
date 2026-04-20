@@ -107,6 +107,16 @@ class ExperimentConfig:
     # Curriculum
     curriculum: Optional[List[Dict]] = None
 
+    # Perturbation force curriculum (progressive difficulty)
+    # Only enable for balance-focused skills. Other skills need a stable
+    # environment to learn their specific motion (jump, walk, etc.)
+    # Forces scale linearly from min to max over total_timesteps
+    perturbation_force_min: float = 10.0   # Newtons at start
+    perturbation_force_max: float = 80.0   # Newtons at end
+    perturbation_torque_min: float = 2.0   # Nm at start
+    perturbation_torque_max: float = 15.0  # Nm at end
+    perturbation_prob: float = 0.0         # Disabled by default -- enable per-skill
+
 
 class G1SkillEnv(gym.Env):
     """
@@ -140,16 +150,18 @@ class G1SkillEnv(gym.Env):
 
         # State tracking
         self._step_count = 0
+        self._global_step = 0  # Cumulative steps across episodes (for perturbation scaling)
         self._prev_action = None
         self._initial_height = None
+        self._current_perturbation = np.zeros(6)  # force_xyz + torque_xyz applied this step
 
         # Get dimensions
         self.nu = self.model.nu  # Number of actuators (43)
         self.nq = self.model.nq  # Position DOF
         self.nv = self.model.nv  # Velocity DOF
 
-        # Observation: qpos (excluding root xyz) + qvel + torso orientation
-        obs_dim = (self.nq - 3) + self.nv + 9  # pos + vel + orientation matrix
+        # Observation: qpos (excluding root xyz) + qvel + torso orientation + perturbation force
+        obs_dim = (self.nq - 3) + self.nv + 9 + 6  # pos + vel + orientation + applied force/torque
         self.observation_space = gym.spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float64
         )
@@ -184,7 +196,15 @@ class G1SkillEnv(gym.Env):
         # Torso orientation (3x3 rotation matrix flattened)
         torso_xmat = self.data.xmat[1].reshape(9)  # Body 1 is torso
 
-        return np.concatenate([qpos, qvel, torso_xmat])
+        # Current perturbation force/torque (normalized to [-1, 1] range)
+        # This lets the policy "feel" the push and counter it proactively
+        max_force = max(self.config.perturbation_force_max, 1.0)
+        max_torque = max(self.config.perturbation_torque_max, 1.0)
+        norm_force = self._current_perturbation[:3] / max_force
+        norm_torque = self._current_perturbation[3:] / max_torque
+        perturbation_obs = np.concatenate([norm_force, norm_torque])
+
+        return np.concatenate([qpos, qvel, torso_xmat, perturbation_obs])
 
     def _get_reward(self) -> float:
         """Compute reward based on skill configuration."""
@@ -424,15 +444,24 @@ class G1SkillEnv(gym.Env):
         ctrl = action * self.model.actuator_ctrlrange[:, 1]
         self.data.ctrl[:] = ctrl
 
-        # Apply random perturbation forces to the torso to train balance recovery.
-        # Small random pushes every ~50 steps (10% chance per step).
-        if np.random.random() < 0.10:
-            # Apply force to torso body (body index 1 in full model)
-            # xfrc_applied is [nbody, 6] -- (force_xyz, torque_xyz)
-            push_force = np.random.uniform(-30, 30, size=3)  # Newtons
-            push_torque = np.random.uniform(-5, 5, size=3)
-            self.data.xfrc_applied[1] = np.concatenate([push_force, push_torque])
+        # Progressive perturbation forces: scale from gentle to aggressive
+        # over the course of training to build balance recovery incrementally.
+        self._global_step += 1
+        progress = min(self._global_step / max(self.config.total_timesteps, 1), 1.0)
+        force_mag = self.config.perturbation_force_min + progress * (
+            self.config.perturbation_force_max - self.config.perturbation_force_min
+        )
+        torque_mag = self.config.perturbation_torque_min + progress * (
+            self.config.perturbation_torque_max - self.config.perturbation_torque_min
+        )
+
+        if np.random.random() < self.config.perturbation_prob:
+            push_force = np.random.uniform(-force_mag, force_mag, size=3)
+            push_torque = np.random.uniform(-torque_mag, torque_mag, size=3)
+            self._current_perturbation = np.concatenate([push_force, push_torque])
+            self.data.xfrc_applied[1] = self._current_perturbation
         else:
+            self._current_perturbation = np.zeros(6)
             self.data.xfrc_applied[1] = 0
 
         # Step simulation

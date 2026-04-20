@@ -78,7 +78,9 @@ class VideoRecorderCallback(BaseCallback):
         qpos = self._mj_data.qpos[3:].copy()
         qvel = self._mj_data.qvel.copy()
         torso_xmat = self._mj_data.xmat[1].reshape(9)
-        return np.concatenate([qpos, qvel, torso_xmat])
+        # Zero perturbation during video recording (no pushes during eval)
+        perturbation_obs = np.zeros(6)
+        return np.concatenate([qpos, qvel, torso_xmat, perturbation_obs])
 
     def _normalize_obs(self, obs: np.ndarray) -> np.ndarray:
         """Apply VecNormalize observation normalization if the training env uses it."""

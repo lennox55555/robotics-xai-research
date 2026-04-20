@@ -448,14 +448,14 @@ SKILL_TEMPLATES = {
     "jump": {
         "name": "Vertical Jump",
         "description": "Perform a vertical jump and land stably",
-        "reward_components": ["jump_height", "landing_stability", "upright_reward", "fall_penalty"],
-        "reward_weights": {"jump_height": 5.0, "landing_stability": 3.0, "upright_reward": 1.0, "fall_penalty": 1.0},
+        "reward_components": ["jump_height", "landing_stability", "upright_reward", "energy_efficiency", "fall_penalty"],
+        "reward_weights": {"jump_height": 8.0, "landing_stability": 3.0, "upright_reward": 1.0, "energy_efficiency": 0.1, "fall_penalty": 1.0},
         "success_criteria": "achieve jump height > 0.1m and land without falling",
         "termination_conditions": ["com_height < 0.3", "episode_length > 500"],
         "training_config": {
             "algorithm": "PPO",
             "total_timesteps": 2_000_000,
-            "learning_rate": 5e-5,
+            "learning_rate": 1e-4,
             "transfer_from": "balance_stand",
         },
         "curriculum": [

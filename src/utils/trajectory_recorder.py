@@ -68,7 +68,8 @@ class TrajectoryRecorder:
         qpos = self._mj_data.qpos[3:].copy()
         qvel = self._mj_data.qvel.copy()
         torso_xmat = self._mj_data.xmat[1].reshape(9)
-        return np.concatenate([qpos, qvel, torso_xmat])
+        perturbation_obs = np.zeros(6)  # No perturbation during trajectory collection
+        return np.concatenate([qpos, qvel, torso_xmat, perturbation_obs])
 
     def _render_image(self) -> np.ndarray:
         """Render RGB image from the specified camera."""

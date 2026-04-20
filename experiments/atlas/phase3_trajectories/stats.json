@@ -1,0 +1,27 @@
+{
+  "balance_stand": {
+    "file": "/Users/lennoxanderson/Documents/Research/robotics-xai-research/experiments/atlas/phase3_trajectories/raw/balance_stand_trajectories.hdf5",
+    "size_mb": 5322.4
+  },
+  "squat": {
+    "file": "/Users/lennoxanderson/Documents/Research/robotics-xai-research/experiments/atlas/phase3_trajectories/raw/squat_trajectories.hdf5",
+    "size_mb": 4870.3
+  },
+  "jump": {
+    "file": "/Users/lennoxanderson/Documents/Research/robotics-xai-research/experiments/atlas/phase3_trajectories/raw/jump_trajectories.hdf5",
+    "size_mb": 3481.3
+  },
+  "walk_forward": {
+    "file": "/Users/lennoxanderson/Documents/Research/robotics-xai-research/experiments/atlas/phase3_trajectories/raw/walk_forward_trajectories.hdf5",
+    "size_mb": 5017.5
+  },
+  "raise_right_hand": {
+    "file": "/Users/lennoxanderson/Documents/Research/robotics-xai-research/experiments/atlas/phase3_trajectories/raw/raise_right_hand_trajectories.hdf5",
+    "size_mb": 9463.8
+  },
+  "wave_right_hand": {
+    "file": "/Users/lennoxanderson/Documents/Research/robotics-xai-research/experiments/atlas/phase3_trajectories/raw/wave_right_hand_trajectories.hdf5",
+    "size_mb": 10474.2
+  },
+  "total_time_minutes": 535.2
+}

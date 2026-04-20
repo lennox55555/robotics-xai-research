@@ -669,12 +669,14 @@ def load_skill(skill_id: str):
 
 
 def get_observation():
-    """Get observation vector."""
+    """Get observation vector (matches G1SkillEnv._get_obs)."""
     data = state["data"]
     qpos = data.qpos[3:].copy()
     qvel = data.qvel.copy()
     torso_xmat = data.xmat[1].reshape(9)
-    return np.concatenate([qpos, qvel, torso_xmat])
+    # No perturbation forces during inference -- zero padding to match training obs dim
+    perturbation_obs = np.zeros(6)
+    return np.concatenate([qpos, qvel, torso_xmat, perturbation_obs])
 
 
 def normalize_observation(obs):
