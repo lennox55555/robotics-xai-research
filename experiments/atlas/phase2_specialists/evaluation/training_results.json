@@ -1,0 +1,27 @@
+{
+  "squat": {
+    "reward": 316.24277354,
+    "steps": 5000000,
+    "status": "trained"
+  },
+  "jump": {
+    "reward": -43.483700080000006,
+    "steps": 15000000,
+    "status": "trained"
+  },
+  "walk_forward": {
+    "reward": 283.89065687,
+    "steps": 5000000,
+    "status": "trained"
+  },
+  "raise_right_hand": {
+    "reward": 272.02816269,
+    "steps": 15000000,
+    "status": "trained"
+  },
+  "wave_right_hand": {
+    "reward": 277.52291871,
+    "steps": 5000000,
+    "status": "trained"
+  }
+}
