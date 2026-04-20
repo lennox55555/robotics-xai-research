@@ -24,18 +24,24 @@ def setup_environment():
     print("ATLAS Phase 4: VLA Fine-Tuning Setup")
     print("=" * 60)
 
-    # Install dependencies
-    print("\nInstalling dependencies...")
+    # Install dependencies in stages to handle failures gracefully
+    print("\nInstalling core dependencies...")
     subprocess.run([
         sys.executable, "-m", "pip", "install", "-q",
-        "octo-models",  # Octo VLA
-        "tensorflow>=2.15.0",
-        "tensorflow-datasets",
-        "flax>=0.8.0",
-        "jax[cuda12]",
-        "h5py",
-        "wandb",
+        "h5py", "wandb", "torch", "torchvision",
     ], check=True)
+
+    # Try installing Octo from GitHub (not on PyPI)
+    print("Installing Octo from GitHub...")
+    octo_result = subprocess.run([
+        sys.executable, "-m", "pip", "install", "-q",
+        "git+https://github.com/octo-models/octo.git",
+    ], capture_output=True, text=True)
+
+    if octo_result.returncode != 0:
+        print(f"Octo install failed (will use PyTorch fallback): {octo_result.stderr[:200]}")
+    else:
+        print("Octo installed successfully")
 
     print("Dependencies installed.")
 
