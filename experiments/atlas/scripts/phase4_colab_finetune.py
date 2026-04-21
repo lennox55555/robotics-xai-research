@@ -119,29 +119,38 @@ def convert_hdf5_to_octo_dataset(project_root: str):
             continue
 
         print(f"\nProcessing {skill_id}...")
-        with h5py.File(str(hdf5_path), "r") as hf:
-            num_episodes = hf["metadata"].attrs.get("num_episodes", 0)
-            # Subsample: take up to 500 episodes per skill to keep manageable
-            max_episodes = min(num_episodes, 500)
+        try:
+            with h5py.File(str(hdf5_path), "r") as hf:
+                num_episodes = hf["metadata"].attrs.get("num_episodes", 0)
+                # Subsample: take up to 500 episodes per skill to keep manageable
+                max_episodes = min(num_episodes, 500)
+                loaded = 0
 
-            for i in range(max_episodes):
-                ep_key = f"episode_{i:05d}"
-                if ep_key not in hf:
-                    continue
+                for i in range(max_episodes):
+                    ep_key = f"episode_{i:05d}"
+                    if ep_key not in hf:
+                        continue
 
-                ep = hf[ep_key]
-                episode_data = {
-                    "observations": {
-                        "image_primary": np.array(ep["images"]),  # (T, 128, 128, 3)
-                        "proprio": np.array(ep["observations"]),  # (T, 111)
-                    },
-                    "actions": np.array(ep["actions"]),  # (T, 43)
-                    "language_instruction": ep.attrs["language_command"],
-                }
-                all_episodes.append(episode_data)
-                total_steps += len(ep["actions"])
+                    try:
+                        ep = hf[ep_key]
+                        episode_data = {
+                            "observations": {
+                                "image_primary": np.array(ep["images"]),  # (T, 128, 128, 3)
+                                "proprio": np.array(ep["observations"]),  # (T, 111)
+                            },
+                            "actions": np.array(ep["actions"]),  # (T, 43)
+                            "language_instruction": ep.attrs["language_command"],
+                        }
+                        all_episodes.append(episode_data)
+                        total_steps += len(ep["actions"])
+                        loaded += 1
+                    except Exception as ep_err:
+                        print(f"  Warning: skipping {ep_key} ({ep_err})")
+                        break  # File likely truncated, stop reading this skill
 
-            print(f"  Loaded {max_episodes} episodes from {skill_id}")
+                print(f"  Loaded {loaded} episodes from {skill_id}")
+        except Exception as e:
+            print(f"  SKIP {skill_id}: corrupted file ({e})")
 
     print(f"\nTotal: {len(all_episodes)} episodes, {total_steps:,} steps")
 
