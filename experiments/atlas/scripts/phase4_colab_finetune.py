@@ -31,10 +31,11 @@ def setup_environment():
         "h5py", "wandb", "torch", "torchvision",
     ], check=True)
 
-    # Try installing Octo from GitHub (not on PyPI)
+    # Try installing Octo and its dependencies from GitHub
     print("Installing Octo from GitHub...")
     octo_result = subprocess.run([
         sys.executable, "-m", "pip", "install", "-q",
+        "dlimp @ git+https://github.com/kvablack/dlimp.git",
         "git+https://github.com/octo-models/octo.git",
     ], capture_output=True, text=True)
 
@@ -350,10 +351,17 @@ def finetune_custom_vla(project_root: str, dataset, num_steps: int = 50000):
 
     # Map language commands to skill IDs
     COMMAND_TO_SKILL = {}
-    from experiments.atlas.scripts.collect_trajectories import LANGUAGE_COMMANDS
-    for skill_id, commands in LANGUAGE_COMMANDS.items():
+    _LANGUAGE_COMMANDS = {
+        "balance_stand": ["stand still and balance", "maintain upright standing position", "balance without moving", "hold a stable standing pose"],
+        "squat": ["squat down", "lower into a squat position", "crouch down and hold", "perform a deep squat"],
+        "jump": ["jump up", "perform a vertical jump", "jump and land", "leap upward"],
+        "walk_forward": ["walk forward", "move forward at a moderate pace", "take steps forward", "walk straight ahead"],
+        "raise_right_hand": ["raise your right hand", "lift the right hand above your head", "put your right hand up", "raise right arm"],
+        "wave_right_hand": ["wave your right hand", "wave hello with your right hand", "wave at me", "wave goodbye"],
+    }
+    for skill_id, commands in _LANGUAGE_COMMANDS.items():
         for cmd in commands:
-            COMMAND_TO_SKILL[cmd] = SKILL_TO_ID[skill_id]
+            COMMAND_TO_SKILL[cmd] = SKILL_TO_ID.get(skill_id, 0)
 
     class TrajectoryDataset(Dataset):
         def __init__(self, episodes):
