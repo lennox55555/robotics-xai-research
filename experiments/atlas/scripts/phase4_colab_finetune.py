@@ -477,13 +477,21 @@ def main():
     # Step 1: Setup
     setup_environment()
 
-    # Step 2: Get data
-    if IN_COLAB:
-        success = mount_and_unzip()
-        if not success:
-            return
+    # Step 2: Verify data exists (mount Drive and unzip manually in Colab cells first)
+    raw_dir = Path(project_root) / "experiments" / "atlas" / "phase3_trajectories" / "raw"
+    hdf5_files = list(raw_dir.glob("*.hdf5")) if raw_dir.exists() else []
+    if not hdf5_files:
+        print("\nERROR: No HDF5 files found in:")
+        print(f"  {raw_dir}")
+        print("\nIn Colab, run these cells BEFORE this script:")
+        print("  Cell 1: from google.colab import drive; drive.mount('/content/drive')")
+        print("  Cell 2: !unzip -o -q /content/drive/MyDrive/atlas_trajectories.zip -d /content/robotics-xai-research/experiments/atlas/phase3_trajectories/raw/")
+        return
     else:
-        print("\nRunning locally -- skipping Drive mount")
+        print(f"\nFound {len(hdf5_files)} HDF5 files:")
+        for f in sorted(hdf5_files):
+            size_gb = f.stat().st_size / (1024**3)
+            print(f"  {f.name}: {size_gb:.1f} GB")
 
     # Step 3: Convert data
     print("\n" + "=" * 60)
