@@ -1,0 +1,159 @@
+[
+  {
+    "prompt_id": 1,
+    "prompt": "Walk forward then stop and balance",
+    "skills_combined": [
+      "walk_forward",
+      "balance_stand"
+    ],
+    "mean_partial_score": 0.19,
+    "full_success_rate": 0.0,
+    "mean_steps": 179.9,
+    "n_episodes": 50,
+    "per_subgoal_success_rate": {
+      "walk_distance_m": 0.38,
+      "final_stand_steps": 0.0
+    }
+  },
+  {
+    "prompt_id": 2,
+    "prompt": "Walk forward and raise your right hand",
+    "skills_combined": [
+      "walk_forward",
+      "raise_right_hand"
+    ],
+    "mean_partial_score": 0.47,
+    "full_success_rate": 0.0,
+    "mean_steps": 165.54,
+    "n_episodes": 50,
+    "per_subgoal_success_rate": {
+      "walk_distance_m": 0.94,
+      "hand_height_m": 0.0
+    }
+  },
+  {
+    "prompt_id": 3,
+    "prompt": "Jump then wave",
+    "skills_combined": [
+      "jump",
+      "wave_right_hand"
+    ],
+    "mean_partial_score": 0.5,
+    "full_success_rate": 0.0,
+    "mean_steps": 99.4,
+    "n_episodes": 50,
+    "per_subgoal_success_rate": {
+      "jump_height_m": 1.0,
+      "wave_oscillation_detected": 0.0
+    }
+  },
+  {
+    "prompt_id": 4,
+    "prompt": "Turn left and walk forward",
+    "skills_combined": [
+      "turn_left",
+      "walk_forward"
+    ],
+    "mean_partial_score": 0.99,
+    "full_success_rate": 0.98,
+    "mean_steps": 161.38,
+    "n_episodes": 50,
+    "per_subgoal_success_rate": {
+      "turn_degrees": 1.0,
+      "walk_distance_m": 0.98
+    }
+  },
+  {
+    "prompt_id": 5,
+    "prompt": "Raise your right hand while standing still",
+    "skills_combined": [
+      "balance_stand",
+      "raise_right_hand"
+    ],
+    "mean_partial_score": 0.0,
+    "full_success_rate": 0.0,
+    "mean_steps": 169.84,
+    "n_episodes": 50,
+    "per_subgoal_success_rate": {
+      "hand_height_m": 0.0,
+      "com_velocity_max": 0.0
+    }
+  },
+  {
+    "prompt_id": 6,
+    "prompt": "Wave while walking forward",
+    "skills_combined": [
+      "walk_forward",
+      "wave_right_hand"
+    ],
+    "mean_partial_score": 0.48,
+    "full_success_rate": 0.0,
+    "mean_steps": 171.2,
+    "n_episodes": 50,
+    "per_subgoal_success_rate": {
+      "walk_distance_m": 0.96,
+      "wave_oscillation_detected": 0.0
+    }
+  },
+  {
+    "prompt_id": 7,
+    "prompt": "Jump three times",
+    "skills_combined": [
+      "jump",
+      "jump",
+      "jump"
+    ],
+    "mean_partial_score": 0.0,
+    "full_success_rate": 0.0,
+    "mean_steps": 98.86,
+    "n_episodes": 50,
+    "per_subgoal_success_rate": {
+      "distinct_jumps": 0.0
+    }
+  },
+  {
+    "prompt_id": 8,
+    "prompt": "Walk forward, stop, and turn left",
+    "skills_combined": [
+      "walk_forward",
+      "balance_stand",
+      "turn_left"
+    ],
+    "mean_partial_score": 0.64,
+    "full_success_rate": 0.0,
+    "mean_steps": 145.34,
+    "n_episodes": 50,
+    "per_subgoal_success_rate": {
+      "walk_distance_m": 0.92,
+      "stop_steps": 0.0,
+      "turn_degrees": 1.0
+    }
+  },
+  {
+    "prompt_id": 9,
+    "prompt": "Raise both hands",
+    "skills_combined": [
+      "raise_right_hand"
+    ],
+    "mean_partial_score": 0.0,
+    "full_success_rate": 0.0,
+    "mean_steps": 650.16,
+    "n_episodes": 50,
+    "per_subgoal_success_rate": {
+      "right_hand_height_m": 0.0,
+      "left_hand_height_m": 0.0
+    }
+  },
+  {
+    "prompt_id": 10,
+    "prompt": "Walk backward",
+    "skills_combined": [],
+    "mean_partial_score": 0.04,
+    "full_success_rate": 0.04,
+    "mean_steps": 157.82,
+    "n_episodes": 50,
+    "per_subgoal_success_rate": {
+      "backward_distance_m": 0.04
+    }
+  }
+]

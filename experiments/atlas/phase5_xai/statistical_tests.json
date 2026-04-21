@@ -1,0 +1,67 @@
+{
+  "balance_stand": {
+    "cosine_sim_mean": 0.3560653328895569,
+    "cosine_sim_std": 0.09820074588060379,
+    "cosine_sim_ci95": [
+      0.33640488013625147,
+      0.3745177432894707
+    ],
+    "spec_entropy_mean": 5.646043300628662,
+    "vla_entropy_mean": 5.5080742835998535,
+    "wilcoxon_statistic": 766.0,
+    "wilcoxon_p_value": 1.4664249814444474e-09,
+    "wilcoxon_p_bonferroni": 7.332125129266842e-09
+  },
+  "squat": {
+    "cosine_sim_mean": 0.38133782148361206,
+    "cosine_sim_std": 0.09275752305984497,
+    "cosine_sim_ci95": [
+      0.36354250833392143,
+      0.399164779484272
+    ],
+    "spec_entropy_mean": 5.750368595123291,
+    "vla_entropy_mean": 5.536682605743408,
+    "wilcoxon_statistic": 270.0,
+    "wilcoxon_p_value": 8.944822083001812e-15,
+    "wilcoxon_p_bonferroni": 4.4724112109074954e-14
+  },
+  "jump": {
+    "cosine_sim_mean": 0.3247362971305847,
+    "cosine_sim_std": 0.09272117912769318,
+    "cosine_sim_ci95": [
+      0.30600635781884195,
+      0.34210752695798874
+    ],
+    "spec_entropy_mean": 5.553494453430176,
+    "vla_entropy_mean": 5.592100620269775,
+    "wilcoxon_statistic": 1909.0,
+    "wilcoxon_p_value": 0.03417437896132469,
+    "wilcoxon_p_bonferroni": 0.17087189853191376
+  },
+  "walk_forward": {
+    "cosine_sim_mean": 0.3586457073688507,
+    "cosine_sim_std": 0.06616093963384628,
+    "cosine_sim_ci95": [
+      0.34510788396000863,
+      0.3720585905015469
+    ],
+    "spec_entropy_mean": 5.713817596435547,
+    "vla_entropy_mean": 5.541742324829102,
+    "wilcoxon_statistic": 740.0,
+    "wilcoxon_p_value": 8.387762151507161e-10,
+    "wilcoxon_p_bonferroni": 4.193881242287034e-09
+  },
+  "raise_right_hand": {
+    "cosine_sim_mean": 0.3817075788974762,
+    "cosine_sim_std": 0.10238377749919891,
+    "cosine_sim_ci95": [
+      0.3621703267097473,
+      0.4019708812236786
+    ],
+    "spec_entropy_mean": 5.742558002471924,
+    "vla_entropy_mean": 5.57786750793457,
+    "wilcoxon_statistic": 689.0,
+    "wilcoxon_p_value": 2.7409419178781036e-10,
+    "wilcoxon_p_bonferroni": 1.3704709589390518e-09
+  }
+}
